@@ -1,0 +1,20 @@
+{
+  "name": "astra-project-forge-personal",
+  "interface": {
+    "displayName": "Astra Project Forge Personal"
+  },
+  "plugins": [
+    {
+      "name": "astra-project-forge",
+      "source": {
+        "source": "local",
+        "path": "./plugins/astra-project-forge"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "astra-project-forge": {
+      "command": "node",
+      "args": [
+        "./server/mcp-server.mjs",
+        "--stdio"
+      ],
+      "cwd": "."
+    }
+  }
+}

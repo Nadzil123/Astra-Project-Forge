@@ -1,0 +1,41 @@
+{
+  "name": "astra-project-forge",
+  "version": "2.6.0",
+  "description": "Local-first General Adaptive Agent Layer for eligible Astra models with goal graphs, epistemic state, adaptive routing, evaluation, recovery, transfer validation, and persistent project memory.",
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "Astra Project Forge contributors"
+  },
+  "keywords": [
+    "adaptive",
+    "reasoning",
+    "projects",
+    "experiments",
+    "verification",
+    "long-horizon",
+    "project-memory",
+    "local-first"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Astra Project Forge",
+    "developerName": "Astra Project Forge contributors",
+    "shortDescription": "General adaptive agent layer with persistent verified project state",
+    "longDescription": "Coordinates qualifying complex work with goal graphs, epistemic state, selective memory, planning, evaluation, adaptation, transfer validation, recovery, specialized available capabilities, and qualitative usage-impact awareness while preserving local-first project state.",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Analyze this complex project, identify the key unknowns, and build an adaptive plan.",
+      "Help me solve this problem through iterative experimentation, verification, and learning.",
+      "Inspect the current state of this project and determine the best next steps based on evidence.",
+      "Use deep adaptive reasoning to understand this system, test assumptions, and improve over time."
+    ],
+    "brandColor": "#F29A3A",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png"
+  }
+}
