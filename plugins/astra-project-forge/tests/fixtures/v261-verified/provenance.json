@@ -1,0 +1,20 @@
+{
+  "commit": "cd0edae9921c80784e11ce3bcaec57f29c224786",
+  "sourcePath": "plugins/astra-project-forge",
+  "sourceRepository": "https://github.com/Nadzil123/Astra-Project-Forge",
+  "extraction": "git archive of the immutable commit; tar extraction with two path components stripped",
+  "sha256": {
+    "ATTRIBUTION.md": "74a9857795d90cd3368a73331192f712cc9412d95314eee18ce95486781501a4",
+    "LICENSE": "5132c7f0475b02c8107a2e0f0363e70423c62d2664ab927e76193226e5e05905",
+    "NOTICE.md": "c35cd5c397efd7eb5313a46f8bce86065f92745d1e080fba134e537e4bcfe598",
+    "package.json": "8411815d2d11df6dd22fa140c8a66afde0b7185ec54fe52b58f08b018ef15c70",
+    "server/adaptive-router.mjs": "4e0d6024cd196601c38e36396173a76f625e5cfc5921b7e486991012457b0506",
+    "server/agent-state.mjs": "ebd558fbba290ae12063fc469831475199a320fe052a3f5504f7c133d2885869",
+    "server/context-efficiency.mjs": "5a5ffb92fe64c73ce095d57ac230d0e8c4bbfc99a39fbfdbb6139131c4734f44",
+    "server/efficiency-governor.mjs": "2f296c69cac192b7ee4fe30b479ec57ad0267c23527e810b702f84529b7ab147",
+    "server/efficiency-ledger.mjs": "d86cbab5af9fc480c6e4ad647f9af12060083c57174c517f0daadde6eec532a0",
+    "server/evidence-cache.mjs": "e208520b0b561fb34e31ddbb7060229e0b4ff1e03473f0351c857f127a70f0a5",
+    "server/mcp-server.mjs": "bee6b1aff591a64cf42dafe29034d4b6e8430efa2fb38377c1d749cd3c037ea0",
+    "server/state-store.mjs": "9ddb4e09dd48890e91dc2f9fffcb5592914c51c3baf162c65c72261176ba205a"
+  }
+}

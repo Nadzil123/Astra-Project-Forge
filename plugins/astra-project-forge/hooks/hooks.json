@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/astra-model-gate.mjs\"",
+            "timeout": 5,
+            "statusMessage": "Checking Astra model compatibility"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/astra-model-gate.mjs\"",
+            "timeout": 5,
+            "statusMessage": "Checking Astra model compatibility"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__astra[_-]project[_-]forge__",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/astra-model-gate.mjs\"",
+            "timeout": 5,
+            "statusMessage": "Enforcing Astra model gate"
+          }
+        ]
+      }
+    ]
+  }
+}
