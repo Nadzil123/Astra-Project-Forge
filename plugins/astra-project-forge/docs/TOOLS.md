@@ -1,4 +1,4 @@
-# Astra Project Forge 2.6.1 — MCP Tools
+# Astra Project Forge 2.6.2 — MCP Tools
 
 ## Primary v2.6 tools
 
@@ -203,3 +203,170 @@ manufacture usage, token, cache-hit, billing or savings measurements.
 ## Usage impact
 
 `MINIMAL`, `LOW`, `MODERATE`, `HIGH`, and `VERY HIGH` are qualitative workflow labels. They are not exact token, compute, or price measurements.
+
+## Optional v2.6.2 coordination and capsules
+
+These modes are explicit opt-ins. All 19 names, legacy required fields, omitted
+options, and existing `summary`/`full` projections remain available. Capsules
+use heuristic selection; their effect on model decision quality is unmeasured.
+They do not guarantee smaller responses or semantically complete context.
+
+### Read decision context and expand records
+
+```json
+{"projectId":"release","resultLevel":"capsule","goalId":"goal-root","maxItems":5}
+```
+
+`forge_context` returns `{context}` containing `identity:{projectId,epoch,revision}`,
+the selected goal, constraints, unmet criteria, epistemic claims and their evidence
+pointers, blockers, uncertainty, risk, failed strategies, changed evidence,
+completion, and `refs`. Optional `cursor:{projectId,epoch,revision}` bounds changes
+without hiding unchanged mandatory safety information. Optional `knownRefs` returns
+pointer/status metadata without full bodies. An invalid cursor produces
+`expansion.resync`; truncation or unavailable data sets `incomplete:true` and supplies
+expansion pointers. Neither flag proves completion or failure.
+
+Expand a returned pointer through `forge_context`:
+
+```json
+{"projectId":"release","references":[{"projectId":"release","epoch":"<returned epoch>","kind":"evaluation","id":"<returned id>","revision":12}]}
+```
+
+This is an explicit full-record read, returning `{context:{identity,references}}`.
+Optional `resultLevel:"full"` is equivalent to omission. Use it without other
+context selection, cursor, `knownRefs` or goal selection.
+Exact available revisions return `unchanged` plus `record`/`ref`; omitted record
+revision requests `current`. Stale versions return `currentRecord`/`currentRef`,
+never a new record labeled as the old revision. Missing or cross-generation refs
+give status and resynchronization guidance. Evidence refs use cache keys, rather
+than caller evidence IDs. A pointer certifies identity, not truth or freshness.
+
+Capsule reads reject `sinceRevision` and `detail:full|recovery`. Capsule-only
+`goalId`, `cursor` and `knownRefs` reject other result levels. Direct full state is
+always available through `forge_context:{projectId,detail:"full"}` or
+`{projectId,detail:"recovery",resultLevel:"full"}`; no budget override is needed.
+
+### Control responses and one-call routing context
+
+`forge_route`, `forge_plan`, `forge_observe` and `forge_evaluate` also accept
+`resultLevel:"capsule"`. This applies the existing summary omissions to record
+acknowledgements and adds `decisionCapsule`; safety fields, missing criteria,
+completion reasons and errors survive. Stored records remain complete. A fused
+evaluation instead labels newly read context `currentDecisionCapsule`, keeping
+its historical response identity and completion distinct.
+
+```json
+{"projectId":"release","complexity":"complex","includeContext":true,"resultLevel":"summary"}
+```
+
+`forge_route.includeContext:true` adds a decision capsule in one MCP call,
+independently of result level. This current snapshot is read after the route
+commit and may include later concurrent updates. Without `projectId`, routing
+remains stateless: requested context is `decisionCapsule:null` with a
+`contextUnavailable` explanation. Projectless capsule output retains the entire
+route and creates no persisted reference.
+
+### Atomic reported evaluation
+
+`forge_evaluate.coordination` conditionally requires `operationId`,
+`stateEpoch` and `expectedRevision`. Optional `evidenceRecords`,
+`changedDependencyIds`, `criteriaUpdates`, `claimUpdates` and `efficiencyEvents`
+join the evaluation in one atomic commit. Omission keeps the legacy evaluation
+path, without implicit goal or claim promotion.
+
+When both are supplied, `changedDependencyIds` invalidates the previously cached
+evidence before `evidenceRecords` registers the newly reported results. This
+allows fresh evidence for the changed source to support explicit criteria and
+claim updates in the same transaction. Incoming stale evidence remains stale;
+invalidation does not by itself establish freshness or satisfy any criterion.
+
+```json
+{
+  "projectId":"release",
+  "outcome":"verified",
+  "summary":"Tests reported passing",
+  "evidenceIds":["tests-1"],
+  "resultLevel":"capsule",
+  "coordination":{
+    "operationId":"release-tests-1",
+    "stateEpoch":"<returned epoch>",
+    "expectedRevision":12,
+    "evidenceRecords":[{"evidenceId":"tests-1","kind":"test","target":"release","dependencies":["release:v1"],"dependencyIds":["release"],"freshness":"fresh","result":{"passed":true}}],
+    "criteriaUpdates":[{"goalId":"goal-root","criterion":"tests pass","satisfied":true,"evidenceIds":["tests-1"]}]
+  }
+}
+```
+
+Criteria must match registered declarations. Claim updates name `claimId` and
+may explicitly update `statement`, `status`, `confidence`, `evidenceIds` and
+`counterEvidenceIds`; `verified` alone never makes a claim known. Efficiency
+events use the existing reported provenance envelope. Entire proposals validate
+before persistence; invalid updates roll back together.
+
+The response adds `identity`, `completion`, `changed`, `refs` and `replayed`.
+Completion is a structural assessment of reported evidence, explicitly
+`assessmentSource:"reported"`, not independent semantic verification. Unmet
+criteria, blockers, contradictions, unknowns and unresolved risk veto completion.
+
+Known claims require assessment pins for their statement and exact evidence content
+and version. Pins live in additive `coordination.claimAssessments` metadata. An
+explicit `status:"known"` or `evidenceIds` update assesses the current support;
+confidence-only, statement-only or unrelated writes do not. Replacing or
+invalidating evidence revokes current completion even if separate criterion
+support remains fresh. Restoring old content requires reassessment too. Legacy
+claim writes still accept external evidence IDs, but absent, ambiguous, stale or
+unpinned support cannot certify current completion. Evidence result fields are
+not interpreted as truth. Historical operation receipts remain unchanged.
+
+Evaluation blockers and uncertainty use the latest assessment within the applicable
+goal, resolving `planId` through its associated goal. An unrelated goal cannot
+clear a failure; a corrected plan for the same goal can. A plan without a goal can
+supersede only itself, and a bare evaluation in a one-goal project has one possible
+goal scope. Conflicting goal/plan associations or multi-goal unscoped evaluations
+remain conservative until an explicit project reassessment.
+
+A **new fused verified evaluation** receives `evaluation.assessmentScope:"project"`
+only when it has no `missingCriteria` and that request explicitly maps every
+registered criterion of every current goal to `satisfied:true` with fresh, valid
+support. Every goal must have nonempty declared criteria. Existing assessments,
+partial mappings or a bare verified outcome do not qualify. This is a reported
+project reassessment, not independent truth verification. In chronological order
+it supersedes earlier ambiguous/unassociated evaluation results only; scoped goal
+failures and claim, risk, checkpoint or hypothesis blockers still apply. Replaying
+that operation cannot clear newer failures or mutate its historical receipt.
+
+After response loss, retry the identical semantic payload and operation ID,
+including its original epoch/revision. A committed request replays once without
+another write, even after later commits. `resultLevel` may vary on retries;
+evaluation/coordination payload changes with the same ID fail. A new operation
+with an old revision or epoch conflicts. The error preserves its legacy
+`content:[{type:"text",text:...}]` and `isError:true` wrapper and adds
+`structuredContent:{code,identity,resync}`. `code` is `REVISION_CONFLICT` or
+`STATE_EPOCH_CONFLICT`; `identity` is the current `{projectId,epoch,revision}`.
+`resync.fullContext` supplies `{tool:"forge_context",arguments:{projectId,detail:"full"}}`
+and `resync.action` instructs the caller to reassess the proposal. Ordinary legacy
+errors retain their previous shape. Conflict rejection changes no persisted
+bytes. Read current context and reconcile the proposal before submitting a new
+operation ID; no automatic retry or semantic merge occurs. Replay identity/completion remain
+historical; `currentDecisionCapsule`, when requested, has its own current identity
+and completion. It must never be substituted for the historical response.
+
+### Advisory host capability selection
+
+```json
+{"complexity":"complex","hostCapabilities":{"deferredDiscovery":true,"discoveryAvailable":true}}
+```
+
+Optional `forge_route.hostCapabilities` accepts only boolean `deferredDiscovery`,
+`allowedSubset`, and `discoveryAvailable`. It returns `capabilitySelection` advice
+with selected names, a complete stable fallback and `advisory:true`. Unknown or
+unsupported support, an unsupported selection stage, or failed/unavailable
+discovery uses the stable catalog. Confirmed support may suggest a temporary
+subset, keeping context expansion and recovery reachable. `tools/list` always
+returns the same 19 schemas and names.
+
+This does not enable deferred loading, `tool_search`, `allowed_tools`, permissions
+or prompt caching. The host adapter must provide and test those facilities;
+selection changes no permissions and reports `cacheSavings:null`. Apply advice
+only when actual host integration and measurements support it. Full context and
+all permitted capabilities remain directly reachable.

@@ -186,9 +186,9 @@ test('both package layouts ship the compact contract and immutable dependencies 
     }
     const packaged = JSON.parse(run(process.execPath, [path.join(source, 'scripts/package-release.mjs'),
       '--output-dir', path.join(temp, 'archives')]));
-    assert.equal(packaged.version, '2.6.1');
+    assert.equal(packaged.version, '2.6.2');
     assert.deepEqual(packaged.archives.map(item => item.pluginPath), [
-      'astra-project-forge-2.6.1', 'astra-project-forge-local-marketplace-2.6.1/plugins/astra-project-forge',
+      'astra-project-forge-2.6.2', 'astra-project-forge-local-marketplace-2.6.2/plugins/astra-project-forge',
     ]);
     for (const [index, archive] of packaged.archives.entries()) {
       await t.test(index === 0 ? 'standalone' : 'marketplace', async () => {

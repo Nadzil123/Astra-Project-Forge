@@ -1,6 +1,6 @@
 {
   "name": "astra-project-forge",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "Local-first General Adaptive Agent Layer for eligible Astra models with goal graphs, epistemic state, adaptive routing, evaluation, recovery, transfer validation, and persistent project memory.",
   "license": "AGPL-3.0-only",
   "author": {

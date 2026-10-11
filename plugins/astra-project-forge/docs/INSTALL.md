@@ -1,4 +1,4 @@
-# Install Astra Project Forge 2.6.1 locally
+# Install Astra Project Forge 2.6.2 locally
 
 Requirements: Node.js 20+ and a Codex build that supports the plugin/hooks configuration used by this package.
 
@@ -22,7 +22,7 @@ printf '%s\n' \
 | node ./server/mcp-server.mjs --stdio
 ```
 
-The response should identify `astra-project-forge` version `2.6.1`. Version
+The response should identify `astra-project-forge` version `2.6.2`. Version
 metadata is loaded relative to the server module, so an absolute server path
 also works from an unrelated current directory such as `/tmp`.
 
@@ -56,20 +56,20 @@ After review and final build, extract the two archives into separate empty
 directories:
 
 ```bash
-unzip /absolute/path/to/release-artifacts/astra-project-forge-local-2.6.1.zip -d /tmp/forge-standalone
-unzip /absolute/path/to/release-artifacts/astra-project-forge-local-marketplace-2.6.1.zip -d /tmp/forge-marketplace
+unzip /absolute/path/to/release-artifacts/astra-project-forge-local-2.6.2.zip -d /tmp/forge-standalone
+unzip /absolute/path/to/release-artifacts/astra-project-forge-local-marketplace-2.6.2.zip -d /tmp/forge-marketplace
 ```
 
 The plugin directories are respectively:
 
-- `/tmp/forge-standalone/astra-project-forge-2.6.1`
-- `/tmp/forge-marketplace/astra-project-forge-local-marketplace-2.6.1/plugins/astra-project-forge`
+- `/tmp/forge-standalone/astra-project-forge-2.6.2`
+- `/tmp/forge-marketplace/astra-project-forge-local-marketplace-2.6.2/plugins/astra-project-forge`
 
 In **each** plugin directory run `npm run check`, `npm test`, and
 `npm run benchmark:efficiency`. Tests include archive composition, repeatable
 rebuilds, and stdio startup from unrelated and special-character paths. They
 need no parent manifest or SDD state. From `/tmp`, run the handshake above using
-each extracted plugin's absolute server path and confirm version `2.6.1`.
+each extracted plugin's absolute server path and confirm version `2.6.2`.
 Send a `tools/list` request to confirm all nine `forge_*` and ten `adaptive_*`
 tools. Use `ASTRA_PROJECT_FORGE_DATA_DIR` pointing to a disposable local
 directory for smoke calls that read/write state.

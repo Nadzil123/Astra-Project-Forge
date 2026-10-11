@@ -23,7 +23,10 @@ const omissions = {
 };
 
 export function projectControlResult(name, result, resultLevel) {
-  if (resultLevel !== 'summary' || result.isError || !Object.hasOwn(omissions, name)) return result;
+  if (!['summary', 'capsule'].includes(resultLevel) || result.isError || !Object.hasOwn(omissions, name)) return result;
+  // No persisted context/references exist for a stateless route. Preserve its
+  // complete decision guidance, including all legacy routing fields.
+  if (resultLevel === 'capsule' && name === 'forge_route' && result.structuredContent?.decisionCapsule === null) return result;
   const structuredContent = { ...result.structuredContent };
   for (const [key, fields] of Object.entries(omissions[name])) {
     if (!Object.hasOwn(structuredContent, key) || structuredContent[key] === null) continue;

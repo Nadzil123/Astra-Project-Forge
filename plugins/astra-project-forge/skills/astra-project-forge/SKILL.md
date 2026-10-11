@@ -35,7 +35,9 @@ Prefer `forge_context` and **selective state retrieval**. Start with `summary`; 
 
 On `forge_context`, use `resultLevel` progressively: `summary`, `relevant`, then `full` only as the decision requires. Use `sinceRevision` for delta retrieval; omit `sinceRevision` for full/raw or recovery output, including recovery from an invalid cursor. Compact into stable facts, active goals, unresolved uncertainties, verified lessons, recent changes, and archive references. Keep stable instructions and reusable context in stable prefixes; append dynamic state later.
 
-For `forge_route`, `forge_plan`, `forge_observe`, and `forge_evaluate`, optional `resultLevel` accepts only `summary` or `full`; omitted/full preserves the complete response. See the [compact control API reference](../../docs/COMPACT-RESPONSES.md) for exact omissions, read-only full-context recovery without repeating mutations, and the projectless-route exception.
+For `forge_route`, `forge_plan`, `forge_observe`, and `forge_evaluate`, optional `resultLevel` accepts `summary`, `full`, or explicitly opted-in `capsule`; omitted/full preserves the complete response. See the [compact control API reference](../../docs/COMPACT-RESPONSES.md) for exact legacy omissions, read-only full-context recovery without repeating mutations, and the projectless-route exception.
+
+Capsules are an optional heuristic mode, never the new default. Use `forge_context` with `resultLevel:"capsule"` only when its decision context is suitable, optionally selecting `goalId`, a generation-aware `cursor` or `knownRefs`. Keep constraints, unmet criteria, contradiction, blockers, uncertainty and risk visible even when unchanged. Treat `incomplete`, broken refs or resync guidance as a reason to expand, not to guess or declare completion. Expand full records with `forge_context:{projectId,references}`; request full/recovery directly when needed, without an efficiency override. Repeated expansion on the same task class means disable capsules for that class until improved. Their effect on model quality is unmeasured. See [the opt-in API examples](../../docs/TOOLS.md#optional-v262-coordination-and-capsules).
 
 ## Goal graph
 
@@ -51,6 +53,8 @@ Use concise plan records: next action, why it is useful, expected evidence, risk
 
 Evaluate results against explicit criteria as `verified`, `partially_verified`, `inconclusive`, `falsified`, or `blocked`. Use anti-thrashing memory: record failed strategies, cause, and retry conditions; do not repeat a strategy unchanged without new evidence or changed conditions.
 
+When explicitly useful, `forge_evaluate.coordination` can atomically register evidence and declared criteria/claim updates with a stable operation ID and expected state epoch/revision. Omission preserves legacy evaluation. Retry a lost response with the identical semantic payload and ID; reconcile new-operation revision conflicts against current context. Completion is based on reported assessments, not semantic truth certification. Preserve a replay's historical identity/completion; a returned `currentDecisionCapsule` is separate current context with its own identity. No meaningful change alone never establishes success.
+
 ## Transfer and recovery
 
 Treat cross-project lessons as **transfer candidates**, not facts. Validate them with evidence in the current project before promotion. Recover from checkpoints and open work after interruptions, permission denials, tool failures, requirement changes, or context switches. Never bypass permission controls.
@@ -58,6 +62,8 @@ Treat cross-project lessons as **transfer candidates**, not facts. Validate them
 ## Available capabilities
 
 Forge coordinates **available capabilities** rather than replacing specialized tools. Use repository, documentation, testing, review, security, runtime, CI, research, data, design, writing, or other capabilities only when the current environment actually exposes them. Persist only decision-relevant evidence.
+
+Optional routing `includeContext:true` supplies decision context in one call. `hostCapabilities` provides advisory selection only when support is confirmed by the host; unknown support or discovery failure uses the stable 19-tool catalog. Advice creates no permissions, deferred discovery, tool restrictions or prompt-cache savings. Context expansion, recovery, full reads and all permitted capabilities remain reachable. Do not change the default retrieval policy based only on plugin configuration or a host capability report; require actual integration and measurements first.
 
 ## Usage & Cost
 
