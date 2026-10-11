@@ -211,8 +211,9 @@ export function coordinateTransition(project, input, { noCommit }) {
   if (request.expectedRevision !== project.revision) throw conflict('Expected revision conflict', 'REVISION_CONFLICT', project);
   const previous = structuredClone(project);
   project.coordination ??= { epoch: getStateIdentity(project).epoch, operations: {}, criteria: [] };
-  for (const record of list(request.evidenceRecords, 'evidenceRecords')) upsertEvidence(project, normalizeEvidenceRecord(record));
+  // Invalidate the pre-request cache before registering newly reported evidence.
   if (request.changedDependencyIds !== undefined) project.efficiency.evidenceCache = invalidateByChangedDependency(project.efficiency.evidenceCache, request.changedDependencyIds);
+  for (const record of list(request.evidenceRecords, 'evidenceRecords')) upsertEvidence(project, normalizeEvidenceRecord(record));
   const mappedGoals = new Set();
   for (const update of list(request.criteriaUpdates, 'criteriaUpdates')) {
     const goal = project.goalGraph.find(item => item.id === update.goalId);

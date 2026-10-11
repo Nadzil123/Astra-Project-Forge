@@ -61,6 +61,34 @@ test('MCP fused evaluation commits once and every projection preserves historica
   assert.equal(changed.isError, true); assert.match(changed.content[0].text, /digest/);
 });
 
+test('MCP fused invalidation preserves fresh support and replay does not invalidate later evidence', async () => {
+  const projectId = 'invalidate-refresh';
+  await init(projectId);
+  ok(await call('forge_observe', { projectId, operation: 'observation', observation: 'Previous check',
+    evidenceRecord: { ...evidence, evidenceId: 'old-evidence' } }));
+  const project = ok(await call('forge_context', { projectId, detail: 'full' })).context.project;
+  const input = fused(project);
+  input.coordination.changedDependencyIds = ['contract'];
+  input.coordination.evidenceRecords = [{ ...evidence, dependencies: ['contract:v2'] }];
+  const receipt = ok(await call('forge_evaluate', input));
+  assert.equal(receipt.completion.recommended, true);
+  assert.equal(receipt.identity.revision, project.revision + 1);
+  const state = ok(await call('forge_context', { projectId, detail: 'full' })).context.project;
+  assert.deepEqual(Object.fromEntries(state.efficiency.evidenceCache.map(item => [item.evidenceId, item.freshness])),
+    { 'old-evidence': 'stale', 'test-evidence': 'fresh' });
+  ok(await call('forge_observe', { projectId, operation: 'observation', observation: 'Later check',
+    evidenceRecord: { ...evidence, evidenceId: 'later-evidence', dependencies: ['contract:v3'] } }));
+  const before = await snapshot();
+  for (const resultLevel of ['full', 'summary', 'capsule']) {
+    const replay = ok(await call('forge_evaluate', { ...input, resultLevel }));
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.identity, receipt.identity);
+    assert.deepEqual(replay.completion, receipt.completion);
+    assert.deepEqual(replay.refs, receipt.refs);
+  }
+  assert.deepEqual(await snapshot(), before);
+});
+
 test('capsule references expand explicitly and full/recovery remain reachable read-only', async () => {
   await init('expansion');
   const observed = ok(await call('forge_observe', { projectId: 'expansion', operation: 'observation', observation: 'Complete test log', evidenceRecord: evidence, resultLevel: 'capsule' }));

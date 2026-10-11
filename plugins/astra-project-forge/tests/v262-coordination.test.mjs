@@ -44,6 +44,75 @@ test('fusion stores evidence, evaluation, explicit criteria/claims, ledger and f
   assert.ok(result.refs.every(ref => ref.projectId === 'p' && ref.epoch === result.identity.epoch));
 });
 
+test('fused invalidation preserves incoming fresh evidence for criteria and known claims', async () => {
+  const { store } = await setup();
+  await store.upsertEvidenceRecord('p', evidence({ evidenceId: 'old' }));
+  await store.upsertEvidenceRecord('p', evidence({ evidenceId: 'unrelated', target: 'other', dependencies: ['other:v1'], dependencyIds: ['other'] }));
+  const claim = await store.addClaim('p', { statement: 'Updated source passes', status: 'unknown' });
+  const input = await request(store, 'invalidate-and-refresh', {
+    changedDependencyIds: ['source'], evidenceRecords: [evidence({ dependencies: ['source:v2'] })],
+    claimUpdates: [{ claimId: claim.id, status: 'known', evidenceIds: ['e1'] }],
+  });
+  const result = await store.coordinateEvaluation('p', input);
+  const state = await store.getProject('p');
+  assert.deepEqual(Object.fromEntries(state.efficiency.evidenceCache.map(item => [item.evidenceId, item.freshness])),
+    { old: 'stale', unrelated: 'fresh', e1: 'fresh' });
+  assert.equal(state.claims.find(item => item.id === claim.id).status, 'known');
+  assert.equal(state.goalGraph.find(item => item.id === 'goal-root').status, 'verified');
+  assert.equal(result.completion.recommended, true);
+  assert.deepEqual(result.completion.missingCriteria, []);
+  assert.deepEqual(result.completion.uncertainties, []);
+  assert.equal(state.revision, input.coordination.expectedRevision + 1);
+});
+
+test('fused invalidation allows fresh same-ID replacement at the existing cache key', async () => {
+  const { store } = await setup();
+  await store.coordinateEvaluation('p', await request(store));
+  const input = await request(store, 'replace-after-change', {
+    changedDependencyIds: ['source'], evidenceRecords: [evidence({ result: { rerun: true } })],
+  });
+  const result = await store.coordinateEvaluation('p', input);
+  const state = await store.getProject('p');
+  assert.equal(state.efficiency.evidenceCache.length, 1);
+  assert.equal(state.efficiency.evidenceCache[0].evidenceId, 'e1');
+  assert.equal(state.efficiency.evidenceCache[0].freshness, 'fresh');
+  assert.deepEqual(state.efficiency.evidenceCache[0].result, { rerun: true });
+  assert.equal(result.completion.recommended, true);
+});
+
+test('fused invalidation does not promote stale incoming criterion or claim support', async () => {
+  const { store, target } = await setup();
+  await store.upsertEvidenceRecord('p', evidence({ evidenceId: 'old' }));
+  const claim = await store.addClaim('p', { statement: 'Source passes', status: 'unknown' });
+  const patch = { changedDependencyIds: ['source'], evidenceRecords: [evidence({ dependencies: ['source:v2'], freshness: 'stale' })] };
+  const input = await request(store, 'stale-claim', { ...patch,
+    claimUpdates: [{ claimId: claim.id, status: 'known', evidenceIds: ['e1'] }] });
+  const before = await readFile(target);
+  await assert.rejects(store.coordinateEvaluation('p', input), /Known claim requires fresh evidence/);
+  assert.deepEqual(await readFile(target), before);
+  const result = await store.coordinateEvaluation('p', await request(store, 'stale-criterion', patch));
+  const state = await store.getProject('p');
+  assert.equal(state.efficiency.evidenceCache.find(item => item.evidenceId === 'e1').freshness, 'stale');
+  assert.equal(result.completion.recommended, false);
+  assert.ok(result.completion.missingCriteria.some(item => item.criterion === 'passes'));
+  assert.equal(state.claims.find(item => item.id === claim.id).status, 'unknown');
+});
+
+test('fused invalidation rolls back cached evidence on invalid incoming records and late errors', async () => {
+  const { store, target } = await setup();
+  await store.coordinateEvaluation('p', await request(store));
+  const before = await readFile(target);
+  for (const [operationId, patch, error] of [
+    ['invalid-incoming', { evidenceRecords: [evidence({ dependencies: ['source:v2'], dependencyIds: [] })] }, /Dependency IDs/],
+    ['late-error', { evidenceRecords: [evidence({ result: { rerun: true } })],
+      efficiencyEvents: [{ type: 'usefulCycles', provenance: { source: 'store', reference: 'fake' } }] }, /reported/],
+  ]) {
+    const input = await request(store, operationId, { changedDependencyIds: ['source'], ...patch });
+    await assert.rejects(store.coordinateEvaluation('p', input), error);
+    assert.deepEqual(await readFile(target), before);
+  }
+});
+
 test('invalid final update rolls back every fused change and exact bytes', async () => {
   const { store, target } = await setup();
   const input = await request(store, 'rollback', { efficiencyEvents: [{ type: 'usefulCycles', provenance: { source: 'store', reference: 'fake' } }] });

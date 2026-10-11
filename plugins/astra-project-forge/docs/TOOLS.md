@@ -274,6 +274,12 @@ route and creates no persisted reference.
 join the evaluation in one atomic commit. Omission keeps the legacy evaluation
 path, without implicit goal or claim promotion.
 
+When both are supplied, `changedDependencyIds` invalidates the previously cached
+evidence before `evidenceRecords` registers the newly reported results. This
+allows fresh evidence for the changed source to support explicit criteria and
+claim updates in the same transaction. Incoming stale evidence remains stale;
+invalidation does not by itself establish freshness or satisfy any criterion.
+
 ```json
 {
   "projectId":"release",

@@ -29,6 +29,14 @@ reported criterion assessments, and model decision quality are different claims.
 
 ## Frozen baseline and exact flags
 
+Pre-push correction (11 October 2026): fused dependency invalidation now applies
+to the existing cache before registering newly reported evidence. Previously,
+one transaction reporting a source change and fresh verification could mark its
+own new evidence stale or reject a supported known-claim update. Incoming stale
+evidence and unsupported assessments still cannot establish completion. The
+measurement table below records the 9 October candidate; it is not a claim that
+the subsequent correction was covered by those historical runs.
+
 The uploaded baseline is `astra-project-forge-local-marketplace-2.6.1.zip`, SHA-256
 `f84fc8a14e4ff75b9c632f4630982bc77a1a1c9b666f859badd96330def5fbcf`.
 `tests/fixtures/v261-uploaded/provenance.json` pins its original runtime bytes.
