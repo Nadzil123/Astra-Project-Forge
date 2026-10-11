@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const archiveNames = ['astra-project-forge-local-2.6.1.zip', 'astra-project-forge-local-marketplace-2.6.1.zip'];
+const archiveNames = ['astra-project-forge-local-2.6.2.zip', 'astra-project-forge-local-marketplace-2.6.2.zip'];
 const requiredFiles = [
   '.codex-plugin/plugin.json', '.mcp.json', 'package.json', 'README.md',
   'LICENSE', 'NOTICE.md', 'ATTRIBUTION.md', 'hooks/hooks.json', 'hooks/astra-model-gate.mjs',
@@ -167,7 +167,7 @@ test('release archives are complete, clean, repeatable and rebuild without check
       assert.deepEqual(await readFile(path.join(output, name)), original[index], 'repeatable archive bytes');
       const extraction = path.join(temp, `extract-${index}`);
       run('unzip', ['-q', path.join(output, name), '-d', extraction]);
-      const top = index === 0 ? 'astra-project-forge-2.6.1' : 'astra-project-forge-local-marketplace-2.6.1';
+      const top = index === 0 ? 'astra-project-forge-2.6.2' : 'astra-project-forge-local-marketplace-2.6.2';
       assert.deepEqual(await readdir(extraction), [top]);
       const plugin = index === 0 ? path.join(extraction, top) : path.join(extraction, top, 'plugins/astra-project-forge');
       const contents = await files(plugin);

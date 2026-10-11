@@ -1,11 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { normalizeEvidenceRecord, evidenceQuery, reusableEvidence, upsertEvidence } from './evidence-records.mjs';
+import { getStateIdentity, coordinateTransition, invalidateChangedCriteria, assessClaimSupport } from './coordination-core.mjs';
+import { buildDecisionCapsule } from './decision-capsule.mjs';
+import { resolveStateReferences } from './state-references.mjs';
+import { withProjectLock, atomicWriteJSON, backupProjectFile } from './project-persistence.mjs';
 import { normalizeEfficiencyPolicy, REASONING_LEVELS, nextReasoningLevel, policyBudget } from './efficiency-governor.mjs';
 import { routeTask } from './adaptive-router.mjs';
 import { selectDelta, compactContext, progressiveResult } from './context-efficiency.mjs';
 import { normalizeEfficiencyLedger, applyEfficiencyEvent } from './efficiency-ledger.mjs';
-import { makeEvidenceKey, fingerprintDependencies, canReuseEvidence, invalidateByChangedDependency } from './evidence-cache.mjs';
+import { makeEvidenceKey, invalidateByChangedDependency } from './evidence-cache.mjs';
 import { recordRevision, latestRecordRevision, stampChangedRecords } from './agent-state.mjs';
 import { createGoalRecord, refreshBlockedGoals, updateGoalRecord, createClaimRecord, updateClaimRecord, createPlanRecord, createEvaluationRecord, createFailedStrategyRecord, createAdaptationRecord } from './agent-state.mjs';
 
@@ -82,72 +88,6 @@ export function routeWithEfficiency(input, efficiency = {}) {
     highRisk: route.risk === 'high' || input.highRisk === true,
   });
   return { ...route, reasoningRecommendation };
-}
-
-function evidenceIdentity(input) {
-  // The cache helper validates JSON data without coercion or serialization loss.
-  makeEvidenceKey({ params: input });
-  const kind = requireString(input?.kind, 'kind');
-  const target = requireString(input?.target, 'target');
-  if (!Array.isArray(input.dependencies)) throw new TypeError('Dependencies must be supplied explicitly');
-  const dependencyFingerprint = fingerprintDependencies(input.dependencies);
-  const identity = { kind, target, params: input.params ?? null, dependencies: [...new Set(input.dependencies)].sort() };
-  const key = makeEvidenceKey(identity);
-  if (Object.hasOwn(input, 'key') && input.key !== key) throw new TypeError('Evidence key does not match identity');
-  if (Object.hasOwn(input, 'dependencyFingerprint') && input.dependencyFingerprint !== dependencyFingerprint) {
-    throw new TypeError('Evidence dependency fingerprint does not match dependencies');
-  }
-  return { ...identity, key, dependencyFingerprint };
-}
-
-function normalizeEvidenceRecord(input) {
-  const identity = evidenceIdentity(input);
-  const evidenceId = requireString(input.evidenceId, 'evidenceId');
-  fingerprintDependencies(input.dependencyIds);
-  if (!Array.isArray(input.dependencyIds)) throw new TypeError('Dependency IDs must be supplied explicitly');
-  if (input.dependencies.length && !input.dependencyIds.length) throw new TypeError('Dependency IDs are required for invalidation');
-  if (!['fresh', 'probably_fresh', 'stale', 'invalidated'].includes(input.freshness)) {
-    throw new TypeError('Invalid evidence freshness');
-  }
-  recordRevision(input);
-  const record = { ...structuredClone(input), ...identity, evidenceId, dependencyIds: [...new Set(input.dependencyIds)].sort() };
-  delete record.revision;
-  // Observation registration assigns its own link after validation.
-  delete record.observationId;
-  return record;
-}
-
-function evidenceQuery(input) {
-  const identity = evidenceIdentity(input);
-  const risk = input.risk ?? 'low';
-  if (!['low', 'medium', 'high'].includes(risk)) throw new TypeError('Invalid evidence risk');
-  return { ...identity, risk };
-}
-
-function reusableEvidence(project, query) {
-  const record = project.efficiency.evidenceCache.find(item => item?.key === query.key);
-  if (!record) return null;
-  // Unknown additive legacy cache data is retained, but cannot certify reuse.
-  try {
-    normalizeEvidenceRecord(record);
-    return canReuseEvidence(record, query) ? record : null;
-  } catch {
-    return null;
-  }
-}
-
-function upsertEvidence(project, validated) {
-  const cache = project.efficiency.evidenceCache;
-  const index = cache.findIndex(item => item?.key === validated.key);
-  const previous = index < 0 ? {} : { ...cache[index] };
-  if (previous.evidenceId !== validated.evidenceId) {
-    delete previous.result;
-    delete previous.observationId;
-  }
-  const record = { ...previous, ...validated };
-  if (index < 0) cache.push(record);
-  else cache[index] = record;
-  return record;
 }
 
 function recordEvidenceReuse(project, record) {
@@ -289,6 +229,7 @@ function normalizeProject(project) {
   const normalized = {
     ...project,
     schemaVersion: VERSION,
+    coordination: project.coordination ?? { epoch: getStateIdentity(project).epoch, operations: {}, criteria: [] },
     revision: recordRevision(project),
     efficiency: normalizeEfficiency(project.efficiency),
     successCriteria: Array.isArray(project.successCriteria) ? project.successCriteria : [],
@@ -321,7 +262,11 @@ export class ProjectStore {
   }
   async #ensure() { await mkdir(this.rootDir, { recursive: true }); }
   #path(projectId) { return path.join(this.rootDir, safeFilename(requireString(projectId, 'projectId'))); }
+  async #withProject(projectId, work) {
+    return withProjectLock(this.#path(projectId), work);
+  }
   async #write(project, previous = this.#baselines.get(project)) {
+    invalidateChangedCriteria(project, previous);
     const revision = Math.max(latestRecordRevision(project), previous ? latestRecordRevision(previous) : 0) + 1;
     recordRevision({ revision });
     stampChangedRecords(project, previous, revision);
@@ -329,390 +274,496 @@ export class ProjectStore {
     await this.#ensure();
     project.updatedAt = now();
     const target = this.#path(project.projectId);
-    const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(temp, `${JSON.stringify(project, null, 2)}\n`, 'utf8');
-    await rename(temp, target);
+    if (previous && previous.schemaVersion !== VERSION) {
+      // Preserve the exact legacy snapshot before its first schema migration.
+      await backupProjectFile(target);
+    }
+    await atomicWriteJSON(target, project);
     this.#baselines.set(project, structuredClone(project));
     return project;
   }
   async getProject(projectId) {
+    return this.#withProject(projectId, async () => {
+      return this.#load(projectId, true);
+    });
+  }
+  async #load(projectId, persistMigration) {
     await this.#ensure();
     try {
       const raw = JSON.parse(await readFile(this.#path(projectId), 'utf8'));
       const migrated = normalizeProject(raw);
-      if (JSON.stringify(raw) !== JSON.stringify(migrated)) await this.#write(migrated, raw);
-      else this.#baselines.set(migrated, structuredClone(migrated));
+      if (persistMigration && JSON.stringify(raw) !== JSON.stringify(migrated)) await this.#write(migrated, raw);
+      else this.#baselines.set(migrated, structuredClone(raw));
       return migrated;
     } catch (error) {
       if (error?.code === 'ENOENT') throw new Error(`Project not found: ${projectId}`);
       throw error;
     }
   }
+  async transact(projectId, update) {
+    return this.#withProject(projectId, async () => {
+      if (typeof update !== 'function' || update.constructor?.name === 'AsyncFunction') {
+        throw new TypeError('Transaction update must be a synchronous function');
+      }
+      const project = await this.#load(projectId, false);
+      const snapshot = structuredClone(project);
+      const skipped = new WeakMap();
+      const result = update(project, { noCommit(value) {
+        const marker = Object.freeze(Object.create(null));
+        skipped.set(marker, value);
+        return marker;
+      } });
+      if (result && typeof result === 'object' && skipped.has(result)) {
+        if (!isDeepStrictEqual(project, snapshot)) throw new TypeError('noCommit callback must not mutate project');
+        return { project, result: skipped.get(result) };
+      }
+      if (project.projectId !== requireString(projectId, 'projectId')) {
+        throw new TypeError('Transaction cannot change projectId identity');
+      }
+      if (result && typeof result.then === 'function') {
+        // A rejected native Promise must not leak an unhandled rejection.
+        if (result instanceof Promise) result.catch(() => {});
+        throw new TypeError('Transaction update must be synchronous; async results are unsupported');
+      }
+      await this.#write(project);
+      return { project, result };
+    });
+  }
   async initializeProject(input) {
-    const projectId = requireString(input?.projectId, 'projectId');
-    const goal = requireString(input?.goal, 'goal');
-    const timestamp = now();
-    const project = {
-      schemaVersion: VERSION, projectId, goal, mode: validateMode(input?.mode),
-      successCriteria: stringArray(input?.successCriteria, 'successCriteria'),
-      constraints: stringArray(input?.constraints, 'constraints'), status: 'active',
-      createdAt: timestamp, updatedAt: timestamp, observations: [], hypotheses: [], experiments: [], checkpoints: [], lessons: [],
-      goalGraph: [], claims: [], plans: [], evaluations: [], adaptations: [], transferCandidates: [], usage: normalizeUsage(null), consolidation: null
-    };
-    project.goalGraph = [makeRootGoal(project)];
-    let previous;
-    try {
-      previous = JSON.parse(await readFile(this.#path(projectId), 'utf8'));
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
-    }
-    return this.#write(normalizeProject(project), previous);
+    return this.#withProject(input?.projectId, async () => {
+      const projectId = requireString(input?.projectId, 'projectId');
+      const goal = requireString(input?.goal, 'goal');
+      const timestamp = now();
+      const project = {
+        schemaVersion: VERSION, projectId, goal, coordination: { epoch: randomUUID(), operations: {}, criteria: [] }, mode: validateMode(input?.mode),
+        successCriteria: stringArray(input?.successCriteria, 'successCriteria'),
+        constraints: stringArray(input?.constraints, 'constraints'), status: 'active',
+        createdAt: timestamp, updatedAt: timestamp, observations: [], hypotheses: [], experiments: [], checkpoints: [], lessons: [],
+        goalGraph: [], claims: [], plans: [], evaluations: [], adaptations: [], transferCandidates: [], usage: normalizeUsage(null), consolidation: null
+      };
+      project.goalGraph = [makeRootGoal(project)];
+      let previous;
+      try {
+        previous = JSON.parse(await readFile(this.#path(projectId), 'utf8'));
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+      return this.#write(normalizeProject(project), previous);
+    });
   }
   async getGoals(projectId) {
-    const project = await this.getProject(projectId);
-    return project.goalGraph;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      return project.goalGraph;
+    });
   }
   async setEfficiencyPolicy(projectId, policy) {
-    const project = await this.getProject(projectId);
-    project.efficiency.policy = normalizeEfficiencyPolicy(policy);
-    await this.#write(project);
-    return project.efficiency;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      project.efficiency.policy = normalizeEfficiencyPolicy(policy);
+      await this.#write(project);
+      return project.efficiency;
+    });
   }
   async routeProject(projectId, input) {
-    const query = actionCacheQuery(input);
-    const project = await this.getProject(projectId);
-    const route = routeWithEfficiency(input, project.efficiency);
-    if (query && route.risk === 'high') query.risk = 'high';
-    const independentValue = input.candidateHasIndependentValue === true && route.usefulReasons.length > 0;
-    const evidenceRecord = query && !independentValue ? reusableEvidence(project, query) : null;
-    if (evidenceRecord) {
-      recordEvidenceReuse(project, evidenceRecord);
-      if (!route.completionRecommended) route.efficiencyDecision = 'reuse';
-      route.requiresJustification = false;
-    }
-    const current = input.currentLevel ?? project.efficiency.reasoningLevel;
-    const direction = REASONING_LEVELS.indexOf(route.reasoningRecommendation.level) - REASONING_LEVELS.indexOf(current);
-    project.efficiency.reasoningLevel = route.reasoningRecommendation.level;
-    project.efficiency.recentlyEscalated = direction > 0 || (direction === 0
-      && (input.recentlyEscalated ?? project.efficiency.recentlyEscalated)
-      && input.uncertaintyResolved !== true && input.riskReducedMaterially !== true);
-    project.efficiency.recentlyDeescalated = direction < 0 || (direction === 0
-      && (input.recentlyDeescalated ?? project.efficiency.recentlyDeescalated));
-    project.efficiency.lastRoute = { ...route, completedCycles: input.completedCycles ?? project.efficiency.lastRoute?.completedCycles ?? 0 };
-    project.usage.lastProfile = route.profile;
-    project.usage.lastUsageImpact = route.usageImpact;
-    await this.#write(project);
-    return {
-      route,
-      noticeRequired: project.usage.firstUseNoticeAcknowledged !== true,
-      deepNoticeRequired: route.profile === 'deep' && project.usage.deepWarningAcknowledged !== true,
-      ...(query ? { evidenceRecord } : {}),
-    };
+    return this.#withProject(projectId, async () => {
+      const query = actionCacheQuery(input);
+      const project = await this.getProject(projectId);
+      const route = routeWithEfficiency(input, project.efficiency);
+      if (query && route.risk === 'high') query.risk = 'high';
+      const independentValue = input.candidateHasIndependentValue === true && route.usefulReasons.length > 0;
+      const evidenceRecord = query && !independentValue ? reusableEvidence(project, query) : null;
+      if (evidenceRecord) {
+        recordEvidenceReuse(project, evidenceRecord);
+        if (!route.completionRecommended) route.efficiencyDecision = 'reuse';
+        route.requiresJustification = false;
+      }
+      const current = input.currentLevel ?? project.efficiency.reasoningLevel;
+      const direction = REASONING_LEVELS.indexOf(route.reasoningRecommendation.level) - REASONING_LEVELS.indexOf(current);
+      project.efficiency.reasoningLevel = route.reasoningRecommendation.level;
+      project.efficiency.recentlyEscalated = direction > 0 || (direction === 0
+        && (input.recentlyEscalated ?? project.efficiency.recentlyEscalated)
+        && input.uncertaintyResolved !== true && input.riskReducedMaterially !== true);
+      project.efficiency.recentlyDeescalated = direction < 0 || (direction === 0
+        && (input.recentlyDeescalated ?? project.efficiency.recentlyDeescalated));
+      project.efficiency.lastRoute = { ...route, completedCycles: input.completedCycles ?? project.efficiency.lastRoute?.completedCycles ?? 0 };
+      project.usage.lastProfile = route.profile;
+      project.usage.lastUsageImpact = route.usageImpact;
+      await this.#write(project);
+      return {
+        route,
+        noticeRequired: project.usage.firstUseNoticeAcknowledged !== true,
+        deepNoticeRequired: route.profile === 'deep' && project.usage.deepWarningAcknowledged !== true,
+        ...(query ? { evidenceRecord } : {}),
+      };
+    });
   }
   async setReasoningState(projectId, patch = {}) {
-    makeEvidenceKey({ params: patch });
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch)
-      || Object.keys(patch).some(key => !['reasoningLevel', 'recentlyEscalated', 'recentlyDeescalated'].includes(key))) {
-      throw new TypeError('Invalid reasoning state patch');
-    }
-    if (Object.hasOwn(patch, 'reasoningLevel') && !REASONING_LEVELS.includes(patch.reasoningLevel)) {
-      throw new TypeError('Invalid reasoning level');
-    }
-    for (const field of ['recentlyEscalated', 'recentlyDeescalated']) {
-      if (Object.hasOwn(patch, field) && typeof patch[field] !== 'boolean') throw new TypeError(`${field} must be boolean`);
-    }
-    const project = await this.getProject(projectId);
-    // Persist guidance and hysteresis only, never a claim about host effort.
-    Object.assign(project.efficiency, patch);
-    await this.#write(project);
-    return project.efficiency;
+    return this.#withProject(projectId, async () => {
+      makeEvidenceKey({ params: patch });
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)
+        || Object.keys(patch).some(key => !['reasoningLevel', 'recentlyEscalated', 'recentlyDeescalated'].includes(key))) {
+        throw new TypeError('Invalid reasoning state patch');
+      }
+      if (Object.hasOwn(patch, 'reasoningLevel') && !REASONING_LEVELS.includes(patch.reasoningLevel)) {
+        throw new TypeError('Invalid reasoning level');
+      }
+      for (const field of ['recentlyEscalated', 'recentlyDeescalated']) {
+        if (Object.hasOwn(patch, field) && typeof patch[field] !== 'boolean') throw new TypeError(`${field} must be boolean`);
+      }
+      const project = await this.getProject(projectId);
+      // Persist guidance and hysteresis only, never a claim about host effort.
+      Object.assign(project.efficiency, patch);
+      await this.#write(project);
+      return project.efficiency;
+    });
   }
   async recordEfficiencyEvent(projectId, event) {
-    applyEfficiencyEvent(null, event);
-    if (event.provenance.source !== 'reported') throw new TypeError('External efficiency events must have reported provenance');
-    if (Object.hasOwn(event, 'revision')) throw new TypeError('Event revisions are store-managed');
-    const project = await this.getProject(projectId);
-    project.efficiency.ledger = applyEfficiencyEvent(project.efficiency.ledger, event);
-    await this.#write(project);
-    return project.efficiency.ledger;
+    return this.#withProject(projectId, async () => {
+      applyEfficiencyEvent(null, event);
+      if (event.provenance.source !== 'reported') throw new TypeError('External efficiency events must have reported provenance');
+      if (Object.hasOwn(event, 'revision')) throw new TypeError('Event revisions are store-managed');
+      const project = await this.getProject(projectId);
+      project.efficiency.ledger = applyEfficiencyEvent(project.efficiency.ledger, event);
+      await this.#write(project);
+      return project.efficiency.ledger;
+    });
   }
   async upsertEvidenceRecord(projectId, input) {
-    const validated = normalizeEvidenceRecord(input);
-    const project = await this.getProject(projectId);
-    const record = upsertEvidence(project, validated);
-    await this.#write(project);
-    return record;
+    return this.#withProject(projectId, async () => {
+      const validated = normalizeEvidenceRecord(input);
+      const project = await this.getProject(projectId);
+      const record = upsertEvidence(project, validated);
+      await this.#write(project);
+      return record;
+    });
   }
   async invalidateEvidence(projectId, changedIds) {
-    invalidateByChangedDependency([], changedIds);
-    const project = await this.getProject(projectId);
-    project.efficiency.evidenceCache = invalidateByChangedDependency(project.efficiency.evidenceCache, changedIds);
-    await this.#write(project);
-    return project.efficiency.evidenceCache;
+    return this.#withProject(projectId, async () => {
+      invalidateByChangedDependency([], changedIds);
+      const project = await this.getProject(projectId);
+      project.efficiency.evidenceCache = invalidateByChangedDependency(project.efficiency.evidenceCache, changedIds);
+      await this.#write(project);
+      return project.efficiency.evidenceCache;
+    });
   }
   async findReusableEvidence(projectId, input) {
-    const query = evidenceQuery(input);
-    return reusableEvidence(await this.getProject(projectId), query);
+    return this.#withProject(projectId, async () => {
+      const query = evidenceQuery(input);
+      return reusableEvidence(await this.getProject(projectId), query);
+    });
   }
   async reuseEvidence(projectId, input) {
-    const query = evidenceQuery(input);
-    const project = await this.getProject(projectId);
-    const record = reusableEvidence(project, query);
-    if (!record) return null;
-    recordEvidenceReuse(project, record);
-    await this.#write(project);
-    return record;
+    return this.#withProject(projectId, async () => {
+      const query = evidenceQuery(input);
+      const project = await this.getProject(projectId);
+      const record = reusableEvidence(project, query);
+      if (!record) return null;
+      recordEvidenceReuse(project, record);
+      await this.#write(project);
+      return record;
+    });
   }
   async addGoal(projectId, input) {
-    const project = await this.getProject(projectId);
-    const record = createGoalRecord(input, project.goalGraph);
-    project.goalGraph.push(record);
-    refreshBlockedGoals(project.goalGraph);
-    await this.#write(project);
-    return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const record = createGoalRecord(input, project.goalGraph);
+      project.goalGraph.push(record);
+      refreshBlockedGoals(project.goalGraph);
+      await this.#write(project);
+      return record;
+    });
   }
   async updateGoal(projectId, goalId, patch) {
-    const project = await this.getProject(projectId);
-    const goal = project.goalGraph.find(item => item.id === requireString(goalId, 'goalId'));
-    if (!goal) throw new Error(`Goal not found: ${goalId}`);
-    updateGoalRecord(goal, patch, project.goalGraph);
-    refreshBlockedGoals(project.goalGraph);
-    await this.#write(project);
-    return goal;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const goal = project.goalGraph.find(item => item.id === requireString(goalId, 'goalId'));
+      if (!goal) throw new Error(`Goal not found: ${goalId}`);
+      updateGoalRecord(goal, patch, project.goalGraph);
+      refreshBlockedGoals(project.goalGraph);
+      await this.#write(project);
+      return goal;
+    });
   }
   async addClaim(projectId, input) {
-    const project = await this.getProject(projectId);
-    const record = createClaimRecord(input);
-    project.claims.push(record);
-    await this.#write(project);
-    return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const record = createClaimRecord(input);
+      project.claims.push(record);
+      assessClaimSupport(project, record, input);
+      await this.#write(project);
+      return record;
+    });
   }
   async updateClaim(projectId, claimId, patch) {
-    const project = await this.getProject(projectId);
-    const claim = project.claims.find(item => item.id === requireString(claimId, 'claimId'));
-    if (!claim) throw new Error(`Claim not found: ${claimId}`);
-    updateClaimRecord(claim, patch);
-    await this.#write(project);
-    return claim;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const claim = project.claims.find(item => item.id === requireString(claimId, 'claimId'));
+      if (!claim) throw new Error(`Claim not found: ${claimId}`);
+      updateClaimRecord(claim, patch);
+      assessClaimSupport(project, claim, patch);
+      await this.#write(project);
+      return claim;
+    });
   }
   async addPlan(projectId, input) {
-    return (await this.planAction(projectId, input)).plan;
+    return this.#withProject(projectId, async () => {
+      return (await this.planAction(projectId, input)).plan;
+    });
   }
   async planAction(projectId, input) {
-    const override = validateBudgetOverride(input);
-    const record = createPlanRecord(input);
-    const query = actionCacheQuery(input);
-    const project = await this.getProject(projectId);
-    if (input?.goalId != null) {
-      const goal = project.goalGraph.find(item => item.id === input.goalId);
-      if (!goal) throw new Error(`Goal not found: ${input.goalId}`);
-      if (goal.status === 'blocked') throw new Error(`Goal is blocked: ${input.goalId}`);
-      if (goal.status === 'verified' || goal.status === 'abandoned') throw new Error(`Goal is not actionable: ${input.goalId}`);
-    }
-    const evidenceRecord = query ? reusableEvidence(project, query) : null;
-    if (evidenceRecord) {
-      recordEvidenceReuse(project, evidenceRecord);
-      await this.#write(project);
-      return { plan: null, evidenceRecord, efficiencyDecision: 'reuse' };
-    }
-    if (record.strategyKey) {
-      const attempts = failedStrategyAttempts(project, record.strategyKey);
-      const usedEvidence = new Set(attempts.flatMap(attempt => stringArray(attempt.newEvidenceIds, 'newEvidenceIds')));
-      const hasNewEvidence = record.newEvidenceIds.some(id => !usedEvidence.has(id));
-      const hasChangedConditions = record.changedConditions !== null && !attempts.some(attempt =>
-        typeof attempt.changedConditions === 'string' && attempt.changedConditions.trim() === record.changedConditions);
-      if (attempts.length && !hasNewEvidence && !hasChangedConditions) {
-        throw new Error(`Failed strategy cannot be repeated unchanged without new evidence or changed conditions: ${record.strategyKey}`);
+    return this.#withProject(projectId, async () => {
+      const override = validateBudgetOverride(input);
+      const record = createPlanRecord(input);
+      const query = actionCacheQuery(input);
+      const project = await this.getProject(projectId);
+      if (input?.goalId != null) {
+        const goal = project.goalGraph.find(item => item.id === input.goalId);
+        if (!goal) throw new Error(`Goal not found: ${input.goalId}`);
+        if (goal.status === 'blocked') throw new Error(`Goal is blocked: ${input.goalId}`);
+        if (goal.status === 'verified' || goal.status === 'abandoned') throw new Error(`Goal is not actionable: ${input.goalId}`);
       }
-    }
-    const policy = normalizeEfficiencyPolicy(input.efficiencyPolicy ?? project.efficiency.policy);
-    const completedCycles = input.completedCycles ?? project.efficiency.lastRoute?.completedCycles ?? 0;
-    const { softCycleBudget } = policyBudget(policy, project.efficiency.lastRoute?.profile ?? 'standard');
-    const requiresOverride = ['MODERATE', 'HIGH', 'VERY HIGH'].includes(record.usageImpact) && completedCycles >= softCycleBudget;
-    if (requiresOverride && !override) throw new Error('Soft budget reached: budgetOverride with a concrete justification is required before expensive planned work');
-    if (override) {
-      record.budgetOverride = {
-        ...override, policy, completedCycles, softCycleBudget,
-        provenance: { source: 'reported', reference: `plan:${record.id}` },
-      };
-    }
-    if (requiresOverride) {
-      project.efficiency.ledger = applyEfficiencyEvent(project.efficiency.ledger, {
-        type: 'softBudgetOverrides', amount: 1,
-        provenance: { source: 'store', reference: `plan:${record.id}:budgetOverride` },
-      });
-    }
-    project.plans.push(record);
-    await this.#write(project);
-    return { plan: record, ...(query ? { evidenceRecord: null } : {}) };
+      const evidenceRecord = query ? reusableEvidence(project, query) : null;
+      if (evidenceRecord) {
+        recordEvidenceReuse(project, evidenceRecord);
+        await this.#write(project);
+        return { plan: null, evidenceRecord, efficiencyDecision: 'reuse' };
+      }
+      if (record.strategyKey) {
+        const attempts = failedStrategyAttempts(project, record.strategyKey);
+        const usedEvidence = new Set(attempts.flatMap(attempt => stringArray(attempt.newEvidenceIds, 'newEvidenceIds')));
+        const hasNewEvidence = record.newEvidenceIds.some(id => !usedEvidence.has(id));
+        const hasChangedConditions = record.changedConditions !== null && !attempts.some(attempt =>
+          typeof attempt.changedConditions === 'string' && attempt.changedConditions.trim() === record.changedConditions);
+        if (attempts.length && !hasNewEvidence && !hasChangedConditions) {
+          throw new Error(`Failed strategy cannot be repeated unchanged without new evidence or changed conditions: ${record.strategyKey}`);
+        }
+      }
+      const policy = normalizeEfficiencyPolicy(input.efficiencyPolicy ?? project.efficiency.policy);
+      const completedCycles = input.completedCycles ?? project.efficiency.lastRoute?.completedCycles ?? 0;
+      const { softCycleBudget } = policyBudget(policy, project.efficiency.lastRoute?.profile ?? 'standard');
+      const requiresOverride = ['MODERATE', 'HIGH', 'VERY HIGH'].includes(record.usageImpact) && completedCycles >= softCycleBudget;
+      if (requiresOverride && !override) throw new Error('Soft budget reached: budgetOverride with a concrete justification is required before expensive planned work');
+      if (override) {
+        record.budgetOverride = {
+          ...override, policy, completedCycles, softCycleBudget,
+          provenance: { source: 'reported', reference: `plan:${record.id}` },
+        };
+      }
+      if (requiresOverride) {
+        project.efficiency.ledger = applyEfficiencyEvent(project.efficiency.ledger, {
+          type: 'softBudgetOverrides', amount: 1,
+          provenance: { source: 'store', reference: `plan:${record.id}:budgetOverride` },
+        });
+      }
+      project.plans.push(record);
+      await this.#write(project);
+      return { plan: record, ...(query ? { evidenceRecord: null } : {}) };
+    });
+  }
+  async coordinateEvaluation(projectId, input) {
+    const { result } = await this.transact(projectId, (project, control) => coordinateTransition(project, input, control));
+    return result;
   }
   async addEvaluation(projectId, input) {
-    const project = await this.getProject(projectId);
-    if (input?.goalId != null && !project.goalGraph.some(item => item.id === input.goalId)) throw new Error(`Goal not found: ${input.goalId}`);
-    if (input?.planId != null && !project.plans.some(item => item.id === input.planId)) throw new Error(`Plan not found: ${input.planId}`);
-    const record = createEvaluationRecord(input);
-    project.evaluations.push(record);
-    const plan = project.plans.find(item => item.id === record.planId);
-    if (plan?.strategyKey && ['falsified', 'blocked'].includes(record.outcome)) {
-      project.efficiency.failedStrategies.push(createFailedStrategyRecord(plan, record));
-    }
-    await this.#write(project);
-    return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      if (input?.goalId != null && !project.goalGraph.some(item => item.id === input.goalId)) throw new Error(`Goal not found: ${input.goalId}`);
+      if (input?.planId != null && !project.plans.some(item => item.id === input.planId)) throw new Error(`Plan not found: ${input.planId}`);
+      const record = createEvaluationRecord(input);
+      project.evaluations.push(record);
+      const plan = project.plans.find(item => item.id === record.planId);
+      if (plan?.strategyKey && ['falsified', 'blocked'].includes(record.outcome)) {
+        project.efficiency.failedStrategies.push(createFailedStrategyRecord(plan, record));
+      }
+      await this.#write(project);
+      return record;
+    });
   }
   async addAdaptation(projectId, input) {
-    const project = await this.getProject(projectId);
-    const record = createAdaptationRecord(input, project.adaptations);
-    project.adaptations.push(record);
-    await this.#write(project);
-    return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const record = createAdaptationRecord(input, project.adaptations);
+      project.adaptations.push(record);
+      await this.#write(project);
+      return record;
+    });
   }
   async addTransferCandidate(projectId, input) {
-    const project = await this.getProject(projectId);
-    const record = {
-      id: makeId('transfer'),
-      sourceProjectId: requireString(input?.sourceProjectId, 'sourceProjectId'),
-      lesson: requireString(input?.lesson, 'lesson'),
-      relevance: input?.relevance == null ? null : requireString(input.relevance, 'relevance'),
-      status: 'candidate',
-      validationEvidenceIds: [],
-      createdAt: now(),
-      updatedAt: now(),
-    };
-    project.transferCandidates.push(record);
-    await this.#write(project);
-    return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const record = {
+        id: makeId('transfer'),
+        sourceProjectId: requireString(input?.sourceProjectId, 'sourceProjectId'),
+        lesson: requireString(input?.lesson, 'lesson'),
+        relevance: input?.relevance == null ? null : requireString(input.relevance, 'relevance'),
+        status: 'candidate',
+        validationEvidenceIds: [],
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      project.transferCandidates.push(record);
+      await this.#write(project);
+      return record;
+    });
   }
   async validateTransferCandidate(projectId, candidateId, evidenceIds) {
-    const project = await this.getProject(projectId);
-    const candidate = project.transferCandidates.find(item => item.id === requireString(candidateId, 'candidateId'));
-    if (!candidate) throw new Error(`Transfer candidate not found: ${candidateId}`);
-    const evidence = stringArray(evidenceIds, 'evidenceIds');
-    if (!evidence.length) throw new Error('Local validation evidence is required before promoting a transfer candidate');
-    candidate.status = 'validated';
-    candidate.validationEvidenceIds = evidence;
-    candidate.updatedAt = now();
-    await this.#write(project);
-    return candidate;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const candidate = project.transferCandidates.find(item => item.id === requireString(candidateId, 'candidateId'));
+      if (!candidate) throw new Error(`Transfer candidate not found: ${candidateId}`);
+      const evidence = stringArray(evidenceIds, 'evidenceIds');
+      if (!evidence.length) throw new Error('Local validation evidence is required before promoting a transfer candidate');
+      candidate.status = 'validated';
+      candidate.validationEvidenceIds = evidence;
+      candidate.updatedAt = now();
+      await this.#write(project);
+      return candidate;
+    });
   }
   async getRecoveryContext(projectId) {
-    const project = await this.getProject(projectId);
-    return {
-      projectId: project.projectId,
-      goal: project.goal,
-      status: project.status,
-      latestCheckpoint: project.checkpoints.at(-1) ?? null,
-      openGoals: project.goalGraph.filter(item => !['verified', 'abandoned'].includes(item.status)),
-      openClaims: project.claims.filter(item => ['unknown', 'inferred', 'contradicted'].includes(item.status)),
-      lastPlan: project.plans.at(-1) ?? null,
-      lastEvaluation: project.evaluations.at(-1) ?? null,
-      lastAdaptation: project.adaptations.at(-1) ?? null,
-      validatedTransfers: project.transferCandidates.filter(item => item.status === 'validated').slice(-5),
-      updatedAt: project.updatedAt,
-    };
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      return {
+        projectId: project.projectId,
+        goal: project.goal,
+        status: project.status,
+        latestCheckpoint: project.checkpoints.at(-1) ?? null,
+        openGoals: project.goalGraph.filter(item => !['verified', 'abandoned'].includes(item.status)),
+        openClaims: project.claims.filter(item => ['unknown', 'inferred', 'contradicted'].includes(item.status)),
+        lastPlan: project.plans.at(-1) ?? null,
+        lastEvaluation: project.evaluations.at(-1) ?? null,
+        lastAdaptation: project.adaptations.at(-1) ?? null,
+        validatedTransfers: project.transferCandidates.filter(item => item.status === 'validated').slice(-5),
+        updatedAt: project.updatedAt,
+      };
+    });
   }
   async setUsageState(projectId, patch = {}) {
-    const project = await this.getProject(projectId);
-    if (patch.lastProfile != null) {
-      if (!['off', 'light', 'standard', 'deep'].includes(patch.lastProfile)) throw new Error('Invalid usage profile');
-      project.usage.lastProfile = patch.lastProfile;
-    }
-    if (patch.lastUsageImpact != null) {
-      if (!['MINIMAL', 'LOW', 'MODERATE', 'HIGH', 'VERY HIGH'].includes(patch.lastUsageImpact)) throw new Error('Invalid usage impact');
-      project.usage.lastUsageImpact = patch.lastUsageImpact;
-    }
-    if (patch.firstUseNoticeAcknowledged != null) project.usage.firstUseNoticeAcknowledged = patch.firstUseNoticeAcknowledged === true;
-    if (patch.deepWarningAcknowledged != null) project.usage.deepWarningAcknowledged = patch.deepWarningAcknowledged === true;
-    await this.#write(project);
-    return project.usage;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      if (patch.lastProfile != null) {
+        if (!['off', 'light', 'standard', 'deep'].includes(patch.lastProfile)) throw new Error('Invalid usage profile');
+        project.usage.lastProfile = patch.lastProfile;
+      }
+      if (patch.lastUsageImpact != null) {
+        if (!['MINIMAL', 'LOW', 'MODERATE', 'HIGH', 'VERY HIGH'].includes(patch.lastUsageImpact)) throw new Error('Invalid usage impact');
+        project.usage.lastUsageImpact = patch.lastUsageImpact;
+      }
+      if (patch.firstUseNoticeAcknowledged != null) project.usage.firstUseNoticeAcknowledged = patch.firstUseNoticeAcknowledged === true;
+      if (patch.deepWarningAcknowledged != null) project.usage.deepWarningAcknowledged = patch.deepWarningAcknowledged === true;
+      await this.#write(project);
+      return project.usage;
+    });
   }
   async addObservation(projectId, input) {
-    return (await this.recordObservation(projectId, input)).observation;
+    return this.#withProject(projectId, async () => {
+      return (await this.recordObservation(projectId, input)).observation;
+    });
   }
   async recordObservation(projectId, input) {
-    const validated = Object.hasOwn(input, 'evidenceRecord') ? normalizeEvidenceRecord(input.evidenceRecord) : null;
-    const record = { id: makeId('obs'), observation: requireString(input?.observation, 'observation'), evidence: input?.evidence == null ? null : requireString(input.evidence, 'evidence'), confidence: validateConfidence(input?.confidence), createdAt: now() };
-    const project = await this.getProject(projectId);
-    const evidenceRecord = validated ? upsertEvidence(project, { ...validated, observationId: record.id }) : null;
-    project.observations.push(record);
-    await this.#write(project);
-    return { observation: record, ...(validated ? { evidenceRecord } : {}) };
+    return this.#withProject(projectId, async () => {
+      const validated = Object.hasOwn(input, 'evidenceRecord') ? normalizeEvidenceRecord(input.evidenceRecord) : null;
+      const record = { id: makeId('obs'), observation: requireString(input?.observation, 'observation'), evidence: input?.evidence == null ? null : requireString(input.evidence, 'evidence'), confidence: validateConfidence(input?.confidence), createdAt: now() };
+      const project = await this.getProject(projectId);
+      const evidenceRecord = validated ? upsertEvidence(project, { ...validated, observationId: record.id }) : null;
+      project.observations.push(record);
+      await this.#write(project);
+      return { observation: record, ...(validated ? { evidenceRecord } : {}) };
+    });
   }
   async addHypothesis(projectId, input) {
-    const project = await this.getProject(projectId);
-    const record = { id: makeId('hyp'), hypothesis: requireString(input?.hypothesis, 'hypothesis'), test: input?.test == null ? null : requireString(input.test, 'test'), confidence: validateConfidence(input?.confidence), status: 'open', createdAt: now() };
-    project.hypotheses.push(record); await this.#write(project); return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const record = { id: makeId('hyp'), hypothesis: requireString(input?.hypothesis, 'hypothesis'), test: input?.test == null ? null : requireString(input.test, 'test'), confidence: validateConfidence(input?.confidence), status: 'open', createdAt: now() };
+      project.hypotheses.push(record); await this.#write(project); return record;
+    });
   }
   async addExperiment(projectId, input) {
-    const project = await this.getProject(projectId);
-    const record = { id: makeId('exp'), hypothesisId: input?.hypothesisId == null ? null : requireString(input.hypothesisId, 'hypothesisId'), action: requireString(input?.action, 'action'), result: requireString(input?.result, 'result'), outcome: validateOutcome(input?.outcome), lesson: input?.lesson == null ? null : requireString(input.lesson, 'lesson'), createdAt: now() };
-    project.experiments.push(record);
-    if (record.hypothesisId) {
-      const hyp = project.hypotheses.find(h => h.id === record.hypothesisId);
-      if (hyp) { hyp.status = record.outcome === 'supported' ? 'supported' : record.outcome === 'falsified' ? 'falsified' : 'open'; hyp.updatedAt = now(); }
-    }
-    if (record.lesson) project.lessons.push({ id: makeId('lesson'), text: record.lesson, sourceExperimentId: record.id, createdAt: now() });
-    await this.#write(project); return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const record = { id: makeId('exp'), hypothesisId: input?.hypothesisId == null ? null : requireString(input.hypothesisId, 'hypothesisId'), action: requireString(input?.action, 'action'), result: requireString(input?.result, 'result'), outcome: validateOutcome(input?.outcome), lesson: input?.lesson == null ? null : requireString(input.lesson, 'lesson'), createdAt: now() };
+      project.experiments.push(record);
+      if (record.hypothesisId) {
+        const hyp = project.hypotheses.find(h => h.id === record.hypothesisId);
+        if (hyp) { hyp.status = record.outcome === 'supported' ? 'supported' : record.outcome === 'falsified' ? 'falsified' : 'open'; hyp.updatedAt = now(); }
+      }
+      if (record.lesson) project.lessons.push({ id: makeId('lesson'), text: record.lesson, sourceExperimentId: record.id, createdAt: now() });
+      await this.#write(project); return record;
+    });
   }
   async addCheckpoint(projectId, input) {
-    const project = await this.getProject(projectId);
-    const record = { id: makeId('checkpoint'), summary: requireString(input?.summary, 'summary'), decisions: stringArray(input?.decisions, 'decisions'), nextSteps: stringArray(input?.nextSteps, 'nextSteps'), remainingUnknowns: stringArray(input?.remainingUnknowns, 'remainingUnknowns'), createdAt: now() };
-    project.checkpoints.push(record); await this.#write(project); return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const record = { id: makeId('checkpoint'), summary: requireString(input?.summary, 'summary'), decisions: stringArray(input?.decisions, 'decisions'), nextSteps: stringArray(input?.nextSteps, 'nextSteps'), remainingUnknowns: stringArray(input?.remainingUnknowns, 'remainingUnknowns'), createdAt: now() };
+      project.checkpoints.push(record); await this.#write(project); return record;
+    });
   }
   async consolidate(projectId, input) {
-    const project = await this.getProject(projectId);
-    const record = { verifiedResult: requireString(input?.verifiedResult, 'verifiedResult'), evidence: stringArray(input?.evidence, 'evidence'), lessons: stringArray(input?.lessons, 'lessons'), remainingUncertainty: stringArray(input?.remainingUncertainty, 'remainingUncertainty'), createdAt: now() };
-    for (const lesson of record.lessons) project.lessons.push({ id: makeId('lesson'), text: lesson, sourceExperimentId: null, createdAt: now() });
-    project.consolidation = record; project.status = 'consolidated'; await this.#write(project); return record;
+    return this.#withProject(projectId, async () => {
+      const project = await this.getProject(projectId);
+      const record = { verifiedResult: requireString(input?.verifiedResult, 'verifiedResult'), evidence: stringArray(input?.evidence, 'evidence'), lessons: stringArray(input?.lessons, 'lessons'), remainingUncertainty: stringArray(input?.remainingUncertainty, 'remainingUncertainty'), createdAt: now() };
+      for (const lesson of record.lessons) project.lessons.push({ id: makeId('lesson'), text: lesson, sourceExperimentId: null, createdAt: now() });
+      project.consolidation = record; project.status = 'consolidated'; await this.#write(project); return record;
+    });
+  }
+  async getDecisionCapsule(projectId, options = {}) {
+    return this.#withProject(projectId, async () => buildDecisionCapsule(await this.#load(projectId, false), options));
+  }
+  async getReferences(projectId, references) {
+    return this.#withProject(projectId, async () => resolveStateReferences(await this.#load(projectId, false), references));
   }
   async getContext(projectId, options = {}) {
-    const selection = contextOptions(options ?? {});
-    const project = await this.getProject(projectId);
-    const detail = ['summary', 'working', 'full'].includes(options?.detail) ? options.detail : 'summary';
-    const requested = Number.isInteger(options?.maxItems) ? options.maxItems : 5;
-    const maxItems = Math.min(20, Math.max(1, requested));
+    return this.#withProject(projectId, async () => {
+      const selection = contextOptions(options ?? {});
+      const project = await this.getProject(projectId);
+      const detail = ['summary', 'working', 'full'].includes(options?.detail) ? options.detail : 'summary';
+      const requested = Number.isInteger(options?.maxItems) ? options.maxItems : 5;
+      const maxItems = Math.min(20, Math.max(1, requested));
 
-    if (selection) return efficientContext(project, options, selection, maxItems);
+      if (selection) return efficientContext(project, options, selection, maxItems);
 
-    if (detail === 'full') return { project };
+      if (detail === 'full') return { project };
 
-    const projectSummary = {
-      schemaVersion: project.schemaVersion, projectId: project.projectId, goal: project.goal, mode: project.mode,
-      successCriteria: project.successCriteria, constraints: project.constraints, status: project.status,
-      createdAt: project.createdAt, updatedAt: project.updatedAt,
-    };
-    const counts = {
-      goals: project.goalGraph.length, claims: project.claims.length,
-      observations: project.observations.length, hypotheses: project.hypotheses.length,
-      experiments: project.experiments.length, plans: project.plans.length,
-      evaluations: project.evaluations.length, adaptations: project.adaptations.length,
-      checkpoints: project.checkpoints.length, lessons: project.lessons.length,
-      transferCandidates: project.transferCandidates.length,
-    };
-    const latestCheckpoint = project.checkpoints.at(-1) ?? null;
-    const recentLessons = project.lessons.slice(-maxItems);
-    const base = {
-      detail, project: projectSummary, counts, latestCheckpoint, recentLessons,
-      usage: project.usage, consolidation: project.consolidation,
-    };
+      const projectSummary = {
+        schemaVersion: project.schemaVersion, projectId: project.projectId, goal: project.goal, mode: project.mode,
+        successCriteria: project.successCriteria, constraints: project.constraints, status: project.status,
+        createdAt: project.createdAt, updatedAt: project.updatedAt,
+      };
+      const counts = {
+        goals: project.goalGraph.length, claims: project.claims.length,
+        observations: project.observations.length, hypotheses: project.hypotheses.length,
+        experiments: project.experiments.length, plans: project.plans.length,
+        evaluations: project.evaluations.length, adaptations: project.adaptations.length,
+        checkpoints: project.checkpoints.length, lessons: project.lessons.length,
+        transferCandidates: project.transferCandidates.length,
+      };
+      const latestCheckpoint = project.checkpoints.at(-1) ?? null;
+      const recentLessons = project.lessons.slice(-maxItems);
+      const base = {
+        detail, project: projectSummary, counts, latestCheckpoint, recentLessons,
+        usage: project.usage, consolidation: project.consolidation,
+      };
 
-    if (detail === 'summary') return base;
+      if (detail === 'summary') return base;
 
-    const openHypotheses = project.hypotheses.filter(item => item.status === 'open');
-    const openGoals = project.goalGraph.filter(item => !['verified', 'abandoned'].includes(item.status));
-    const openClaims = project.claims.filter(item => ['unknown', 'inferred', 'contradicted'].includes(item.status));
-    return {
-      ...base,
-      goals: (openGoals.length ? openGoals : project.goalGraph).slice(-maxItems),
-      claims: (openClaims.length ? openClaims : project.claims).slice(-maxItems),
-      observations: project.observations.slice(-maxItems),
-      hypotheses: (openHypotheses.length ? openHypotheses : project.hypotheses).slice(-maxItems),
-      experiments: project.experiments.slice(-maxItems),
-      plans: project.plans.slice(-maxItems),
-      evaluations: project.evaluations.slice(-maxItems),
-      adaptations: project.adaptations.slice(-maxItems),
-      transferCandidates: project.transferCandidates.slice(-maxItems),
-      checkpoints: project.checkpoints.slice(-maxItems),
-    };
+      const openHypotheses = project.hypotheses.filter(item => item.status === 'open');
+      const openGoals = project.goalGraph.filter(item => !['verified', 'abandoned'].includes(item.status));
+      const openClaims = project.claims.filter(item => ['unknown', 'inferred', 'contradicted'].includes(item.status));
+      return {
+        ...base,
+        goals: (openGoals.length ? openGoals : project.goalGraph).slice(-maxItems),
+        claims: (openClaims.length ? openClaims : project.claims).slice(-maxItems),
+        observations: project.observations.slice(-maxItems),
+        hypotheses: (openHypotheses.length ? openHypotheses : project.hypotheses).slice(-maxItems),
+        experiments: project.experiments.slice(-maxItems),
+        plans: project.plans.slice(-maxItems),
+        evaluations: project.evaluations.slice(-maxItems),
+        adaptations: project.adaptations.slice(-maxItems),
+        transferCandidates: project.transferCandidates.slice(-maxItems),
+        checkpoints: project.checkpoints.slice(-maxItems),
+      };
+    });
   }
   async listProjects() {
     await this.#ensure();

@@ -19,7 +19,7 @@ const input = [
   } }
 ].map(message => JSON.stringify(message)).join('\n') + '\n';
 
-function verifyStartup(command, args, cwd, dataDir, version = '2.6.1') {
+function verifyStartup(command, args, cwd, dataDir, version = '2.6.2') {
   const result = spawnSync(command, args, {
     cwd, env: { ...process.env, ASTRA_PROJECT_FORGE_DATA_DIR: dataDir },
     input, encoding: 'utf8', timeout: 5000

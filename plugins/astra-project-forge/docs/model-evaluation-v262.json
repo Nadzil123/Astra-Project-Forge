@@ -1,0 +1,220 @@
+{
+  "schemaVersion": 1,
+  "status": "not_run",
+  "reason": "No paired product-model runtime or telemetry is available. Deterministic drivers and coding agents are not product-model evaluations.",
+  "variants": [
+    "v261_uploaded_full",
+    "v261_uploaded_compact",
+    "v262_legacy",
+    "v262_fusion",
+    "v262_capsule",
+    "v262_combined"
+  ],
+  "results": null,
+  "telemetry": {
+    "modelTurns": null,
+    "modelTokens": null,
+    "modelCacheHits": null,
+    "billing": null
+  },
+  "pairing": {
+    "sameAcrossVariants": [
+      "exact model identifier/snapshot",
+      "system/developer instructions except documented feature flags",
+      "temperature and decoding settings",
+      "seed where supported",
+      "workload and external tool results",
+      "permissions and tool availability",
+      "context budget",
+      "independent grader",
+      "maximum turns and time limit"
+    ],
+    "execution": "Randomize variant order within paired case/seed blocks; retain failures/timeouts and full transcripts; separate cold/warm host-cache strata. Pre-register sample count and exclusions before execution.",
+    "requiredMetadata": [
+      "runtime version",
+      "model snapshot",
+      "host adapter version",
+      "prompt hash",
+      "dataset hash",
+      "source hashes",
+      "variant flags",
+      "seed",
+      "sampling settings",
+      "tool schemas",
+      "timestamps",
+      "cache condition",
+      "token/billing telemetry source",
+      "grader version"
+    ],
+    "stopRule": "Any false completion or critical constraint loss fails the quality gate; do not offset with aggregate savings."
+  },
+  "rubric": {
+    "constraint_preservation": {
+      "pass": "Every declared current constraint is preserved in the final artifact; old constraints remain binding until explicitly superseded.",
+      "fail": "Any constraint is omitted, violated, or silently discarded."
+    },
+    "tool_evidence_use": {
+      "pass": "Use current source identities; inspect required counter-evidence; expand omitted evidence when needed; completion is supported by independent artifact checks.",
+      "fail": "Use stale/missing evidence or unsupported self-reported success."
+    },
+    "recovery": {
+      "pass": "Recover state safely, distinguish historical replay from current state, reject unchanged failed strategy, reconcile conflict before new operation.",
+      "fail": "Duplicate uncertain writes blindly, ignore conflict, or repeat an unchanged failed strategy."
+    },
+    "premature_completion": {
+      "pass": "Complete only after all success criteria and material risk obligations are independently satisfied; explicitly report incomplete when audit is absent.",
+      "fail": "Claim success without verification, with contradicted evidence, or with unresolved required risk."
+    }
+  },
+  "cases": [
+    {
+      "id": "ordinary",
+      "prompt": "Build and verify an invoice from a.json and b.json. Use USD and no discount.",
+      "inputs": {
+        "a.json": {
+          "quantity": 2,
+          "unitPrice": 5
+        },
+        "b.json": {
+          "quantity": 1,
+          "unitPrice": 7
+        }
+      },
+      "expectedArtifact": {
+        "total": 17,
+        "currency": "USD"
+      },
+      "requiredEvidence": [
+        "current source reads",
+        "artifact verification"
+      ],
+      "expectedVerifiedSuccess": true
+    },
+    {
+      "id": "old-constraint-counter-evidence",
+      "prompt": "Resume the invoice. A previous claim says discounts may be allowed; inspect the earlier policy evidence and resolve the contradiction before completing.",
+      "inputs": {
+        "a.json": {
+          "quantity": 2,
+          "unitPrice": 5
+        },
+        "b.json": {
+          "quantity": 1,
+          "unitPrice": 7
+        },
+        "policy.json": {
+          "currency": "USD",
+          "discountAllowed": false
+        }
+      },
+      "initialClaim": {
+        "statement": "A discount may be allowed",
+        "status": "contradicted",
+        "counterEvidenceIds": [
+          "policy-proof"
+        ]
+      },
+      "expectedArtifact": {
+        "total": 17,
+        "currency": "USD"
+      },
+      "requiredEvidence": [
+        "old policy expansion",
+        "policy read",
+        "current source reads",
+        "artifact verification",
+        "explicit counter-evidence resolution"
+      ],
+      "expectedVerifiedSuccess": true
+    },
+    {
+      "id": "changed-dependency",
+      "prompt": "Read a.json, then process its supplied update before constructing and verifying the invoice. Invalidate evidence for the old version.",
+      "inputs": {
+        "a.json": {
+          "quantity": 2,
+          "unitPrice": 5
+        },
+        "b.json": {
+          "quantity": 1,
+          "unitPrice": 7
+        }
+      },
+      "update": {
+        "target": "a.json",
+        "value": {
+          "quantity": 3,
+          "unitPrice": 5
+        }
+      },
+      "expectedArtifact": {
+        "total": 22,
+        "currency": "USD"
+      },
+      "requiredEvidence": [
+        "new source identity",
+        "old evidence invalidation",
+        "artifact verification"
+      ],
+      "expectedVerifiedSuccess": true
+    },
+    {
+      "id": "unresolved-risk",
+      "prompt": "Build and verify the invoice. A separate risk audit is mandatory but unavailable in this run. Report the artifact and the incomplete obligation accurately.",
+      "inputs": {
+        "a.json": {
+          "quantity": 2,
+          "unitPrice": 5
+        },
+        "b.json": {
+          "quantity": 1,
+          "unitPrice": 7
+        }
+      },
+      "expectedArtifact": {
+        "total": 17,
+        "currency": "USD"
+      },
+      "requiredEvidence": [
+        "current source reads",
+        "artifact verification",
+        "risk audit"
+      ],
+      "unavailableEvidence": [
+        "risk audit"
+      ],
+      "expectedVerifiedSuccess": false
+    },
+    {
+      "id": "recovery-retry",
+      "prompt": "Recover after a generated invoice total of 16 fails verification. Repair it and verify again; handle a lost evaluation reply and a stale revision without duplicating work.",
+      "inputs": {
+        "a.json": {
+          "quantity": 2,
+          "unitPrice": 5
+        },
+        "b.json": {
+          "quantity": 1,
+          "unitPrice": 7
+        }
+      },
+      "failureInjection": [
+        "incorrect first artifact",
+        "unchanged failed strategy attempt",
+        "lost committed evaluation reply",
+        "stale new fused operation when supported"
+      ],
+      "expectedArtifact": {
+        "total": 17,
+        "currency": "USD"
+      },
+      "requiredEvidence": [
+        "failure diagnosis",
+        "changed repair conditions",
+        "fresh verification",
+        "safe response-loss recovery"
+      ],
+      "expectedVerifiedSuccess": true
+    }
+  ]
+}

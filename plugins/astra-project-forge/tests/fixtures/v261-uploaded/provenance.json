@@ -1,0 +1,16 @@
+{
+  "archive": "astra-project-forge-local-marketplace-2.6.1.zip",
+  "archiveSha256": "f84fc8a14e4ff75b9c632f4630982bc77a1a1c9b666f859badd96330def5fbcf",
+  "sha256": {
+    "package.json": "825f8bc09ae9ebfc3deda6d3332bc9b1f7b631213721a663b7287468b4920af7",
+    "server/adaptive-router.mjs": "4e0d6024cd196601c38e36396173a76f625e5cfc5921b7e486991012457b0506",
+    "server/agent-state.mjs": "ebd558fbba290ae12063fc469831475199a320fe052a3f5504f7c133d2885869",
+    "server/context-efficiency.mjs": "5a5ffb92fe64c73ce095d57ac230d0e8c4bbfc99a39fbfdbb6139131c4734f44",
+    "server/control-results.mjs": "c1d7da0f4f374e30362c5acb442b73f0e703817f8e4df17d92dd8eb031354e0a",
+    "server/efficiency-governor.mjs": "2f296c69cac192b7ee4fe30b479ec57ad0267c23527e810b702f84529b7ab147",
+    "server/efficiency-ledger.mjs": "d86cbab5af9fc480c6e4ad647f9af12060083c57174c517f0daadde6eec532a0",
+    "server/evidence-cache.mjs": "e208520b0b561fb34e31ddbb7060229e0b4ff1e03473f0351c857f127a70f0a5",
+    "server/mcp-server.mjs": "d9fdb1256db7b46cd2a6543df1effd0a22092be613c22fc373a787bc739b2d24",
+    "server/state-store.mjs": "8c8823a3509fbae47cdb2cb33ef84cd99cb9896ee60d9fd9c0a981007fdac813"
+  }
+}

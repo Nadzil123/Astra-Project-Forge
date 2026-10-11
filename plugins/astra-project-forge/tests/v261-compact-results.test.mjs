@@ -58,7 +58,7 @@ test('scratch state directory is outside the plugin source root', async () => {
     `Scratch state directory must be outside the plugin source root: ${dir}`);
 });
 
-test('discovery preserves exactly 19 names and exposes optional summary/full only on selected controls', async () => {
+test('discovery preserves exactly 19 names and exposes optional summary/full/capsule only on selected controls', async () => {
   const { tools } = await dispatch({ method: 'tools/list' });
   assert.deepEqual(tools.map(tool => tool.name).sort(), [
     'forge_route', 'forge_goal', 'forge_context', 'forge_observe', 'forge_plan', 'forge_evaluate', 'forge_adapt', 'forge_checkpoint', 'forge_consolidate',
@@ -67,7 +67,7 @@ test('discovery preserves exactly 19 names and exposes optional summary/full onl
   ].sort());
   for (const tool of tools) {
     if (selected.includes(tool.name)) {
-      assert.deepEqual(tool.inputSchema.properties.resultLevel?.enum, ['summary', 'full'], tool.name);
+      assert.deepEqual(tool.inputSchema.properties.resultLevel?.enum, ['summary', 'full', 'capsule'], tool.name);
       assert.equal(tool.inputSchema.properties.resultLevel.type, 'string');
       assert.ok(!tool.inputSchema.required.includes('resultLevel'));
     } else if (tool.name !== 'forge_context') assert.equal(tool.inputSchema.properties.resultLevel, undefined);

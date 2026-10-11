@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { ProjectStore, routeWithEfficiency, BUDGET_OVERRIDE_CATEGORIES } from './state-store.mjs';
 import { routeTask } from './adaptive-router.mjs';
 import { projectControlResult } from './control-results.mjs';
+import { selectCapabilities, validateHostCapabilities } from './host-capabilities.mjs';
 
 const SERVER_NAME = 'astra-project-forge';
 const SERVER_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -22,7 +23,7 @@ const bool = description => ({ type: 'boolean', description });
 const integer = (description, minimum, maximum) => ({ type: 'integer', minimum, maximum, description });
 
 const efficiencyPolicy = { type: 'string', enum: ['eco', 'balanced', 'performance', 'maximum'] };
-const controlResultLevel = { type: 'string', enum: ['summary', 'full'], description: 'Optional response projection. Summary omits redundant echoes; omitted/full preserves complete responses. Persisted records remain complete.' };
+const controlResultLevel = { type: 'string', enum: ['summary', 'full', 'capsule'], description: 'Optional response projection. Summary omits redundant echoes; capsule adds heuristic decision context and expansion pointers. Omitted/full preserves complete responses. Persisted records remain complete.' };
 const cacheIdentityFields = {
   kind: str('Evidence kind.'), target: str('Evidence target.'),
   params: { description: 'Canonical JSON parameters; omitted means null.' },
@@ -36,6 +37,45 @@ const evidenceRecord = {
   }, ['kind', 'target', 'dependencies', 'evidenceId', 'dependencyIds', 'freshness']),
   additionalProperties: true,
 };
+const stateIdentity = objectSchema({ projectId: str('Project identifier.'), epoch: str('State generation.'),
+  revision: integer('Revision.', 0, Number.MAX_SAFE_INTEGER) }, ['projectId', 'epoch', 'revision']);
+const stateReference = objectSchema({ ...stateIdentity.properties, kind: str('Record kind; evidence uses cache keys.'), id: str('Record identity.') }, ['projectId', 'epoch', 'kind', 'id']);
+const referenceArray = { type: 'array', items: stateReference };
+const hostCapabilities = objectSchema({ deferredDiscovery: bool('Caller reports host deferred discovery support.'),
+  allowedSubset: bool('Caller reports host reversible subset support.'), discoveryAvailable: bool('Discovery is currently reachable; false requests fallback.') });
+const coordination = objectSchema({
+  operationId: str('Unique retry identity for this exact evaluation payload.'), stateEpoch: str('Expected state generation.'),
+  expectedRevision: integer('Expected project revision before commit.', 0, Number.MAX_SAFE_INTEGER),
+  evidenceRecords: { type: 'array', items: evidenceRecord }, changedDependencyIds: strings('Changed stable dependency IDs.'),
+  criteriaUpdates: { type: 'array', items: objectSchema({ goalId: str('Goal identifier.'), criterion: str('Registered criterion.'),
+    satisfied: bool('Explicit reported criterion assessment.'), evidenceIds: strings('Supporting evidence IDs.') }, ['goalId', 'criterion', 'satisfied']) },
+  claimUpdates: { type: 'array', items: objectSchema({ claimId: str('Claim identifier.'),
+    statement: str('Updated claim statement.'),
+    status: { type: 'string', enum: ['known', 'inferred', 'unknown', 'contradicted'] }, confidence,
+    evidenceIds: strings('Supporting evidence IDs.'), counterEvidenceIds: strings('Counter-evidence IDs.') }, ['claimId']) },
+  efficiencyEvents: { type: 'array', items: objectSchema({ type: { type: 'string', enum: ['usefulCycles', 'avoidedCycles', 'reusedEvidence', 'duplicateToolCallsAvoided', 'contextsCompacted', 'reasoningEscalations', 'softBudgetOverrides', 'stop'] },
+    amount: integer('Caller-reported amount.', 0, Number.MAX_SAFE_INTEGER), reason: str('Stop reason.'),
+    provenance: objectSchema({ source: { type: 'string', enum: ['reported'] }, reference: str('Report evidence reference.') }, ['source', 'reference']) }, ['type', 'provenance']) },
+}, ['operationId', 'stateEpoch', 'expectedRevision']);
+
+// Validate only the additive envelopes. Legacy argument validation remains in
+// the existing engine; JSONRPC itself does not enforce advertised schemas.
+function validateEnvelope(value, schema, name) {
+  if (schema.type === 'object') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`Invalid ${name}: must be an object`);
+    for (const required of schema.required ?? []) if (!Object.hasOwn(value, required)) throw new TypeError(`Invalid ${name}: ${required} is required`);
+    for (const key of Object.keys(value)) {
+      if (Object.hasOwn(schema.properties, key)) validateEnvelope(value[key], schema.properties[key], `${name}.${key}`);
+      else if (schema.additionalProperties === false) throw new TypeError(`Invalid ${name}: unsupported field ${key}`);
+    }
+  } else if (schema.type === 'array') {
+    if (!Array.isArray(value)) throw new TypeError(`Invalid ${name}: must be an array`);
+    value.forEach((item, index) => validateEnvelope(item, schema.items, `${name}[${index}]`));
+  } else if (schema.type) {
+    validateOptionalFields({ [name]: value }, { [name]: schema });
+    if (schema.type === 'number' && (value < schema.minimum || value > schema.maximum || !Number.isFinite(value))) throw new TypeError(`Invalid ${name}: number outside range`);
+  }
+}
 const routingEfficiencyFields = {
   efficiencyPolicy,
   completedCycles: integer('Caller-reported completed cycles, not measured execution.', 0, Number.MAX_SAFE_INTEGER),
@@ -175,6 +215,7 @@ const forgeTools = [
       risk: { type: 'string', enum: ['low', 'medium', 'high'] },
       expectedIterations: integer('Expected number of adaptive iterations.', 0, 100),
       ...routingEfficiencyFields, cacheRequest, resultLevel: controlResultLevel,
+      includeContext: bool('Opt into a decision capsule in this routing response.'), hostCapabilities,
     }, ['complexity']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
   },
@@ -198,7 +239,9 @@ const forgeTools = [
       projectId: str('Project identifier.'),
       detail: { type: 'string', enum: ['summary', 'working', 'full', 'recovery'] },
       sinceRevision: integer('Return all records changed after this revision; incompatible with full/recovery.', 0, Number.MAX_SAFE_INTEGER),
-      resultLevel: { type: 'string', enum: ['summary', 'relevant', 'full'], description: 'Opt into compact, relevant or complete state. Full/recovery require full output without a cursor.' },
+      resultLevel: { type: 'string', enum: ['summary', 'relevant', 'full', 'capsule'], description: 'Opt into compact, relevant, complete or heuristic capsule state. Full/recovery require full output without a cursor.' },
+      goalId: str('Optional capsule goal selection.'), cursor: stateIdentity,
+      knownRefs: referenceArray, references: { ...referenceArray, description: 'Explicit full-record expansion; incompatible with capsule, cursor and legacy projection options.' },
       maxItems: integer('Maximum recent records per working-state section.', 1, 20)
     }, ['projectId']),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
@@ -247,7 +290,7 @@ const forgeTools = [
       projectId: str('Project identifier.'), goalId: str('Goal identifier.'), planId: str('Plan identifier.'),
       outcome: { type: 'string', enum: ['verified', 'partially_verified', 'inconclusive', 'falsified', 'blocked'] },
       summary: str('Evaluation summary.'), evidenceIds: strings('Supporting evidence identifiers.'), missingCriteria: strings('Criteria not yet satisfied.'),
-      resultLevel: controlResultLevel,
+      resultLevel: controlResultLevel, coordination,
     }, ['projectId', 'outcome', 'summary']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
   },
@@ -305,11 +348,14 @@ async function callTool(name, args = {}) {
   switch (name) {
     case 'forge_route': {
       validateOptionalFields(args, routingEfficiencyFields);
+      validateOptionalFields(args, { includeContext: bool('Include decision context') });
+      if (Object.hasOwn(args, 'hostCapabilities')) validateHostCapabilities(args.hostCapabilities);
       if (Object.hasOwn(args, 'cacheRequest') && !args.projectId) throw new TypeError('cacheRequest requires projectId');
       const result = args.projectId
         ? await store.routeProject(args.projectId, args)
         : { route: routeWithEfficiency(args), noticeRequired: false, deepNoticeRequired: false };
       const { route, noticeRequired, deepNoticeRequired } = result;
+      if (Object.hasOwn(args, 'hostCapabilities')) result.capabilitySelection = selectCapabilities({ stage: 'route', hostCapabilities: args.hostCapabilities });
       const noticeText = noticeRequired || deepNoticeRequired ? ' Usage notice acknowledgement is required before proceeding with the indicated Forge intensity.' : '';
       return textResult(`Forge routing profile: ${route.profile}. Usage impact: ${route.usageImpact}.${noticeText}`, result);
     }
@@ -326,6 +372,25 @@ async function callTool(name, args = {}) {
       return errorResult(`Unknown forge_goal operation: ${args.operation}`);
     }
     case 'forge_context': {
+      const has = key => Object.hasOwn(args, key);
+      if (has('references')) {
+        if (['cursor', 'knownRefs', 'goalId', 'sinceRevision', 'detail', 'maxItems'].some(has)
+          || (has('resultLevel') && args.resultLevel !== 'full')) {
+          throw new TypeError('references is an explicit full-record read; do not combine it with cursor, capsule, goal selection or legacy context options');
+        }
+        const context = await store.getReferences(args.projectId, args.references);
+        return textResult(`Expanded Forge references for "${args.projectId}".`, { context });
+      }
+      if (args.resultLevel === 'capsule') {
+        if (has('sinceRevision') || ['full', 'recovery'].includes(args.detail)) throw new TypeError('capsule is incompatible with sinceRevision and full/recovery detail; use full context directly');
+        if (has('goalId')) validateOptionalFields(args, { goalId: str('Goal identity') });
+        if (has('knownRefs') && !Array.isArray(args.knownRefs)) throw new TypeError('knownRefs must be an array');
+        // Malformed cursors/individual refs intentionally receive resync/status
+        // guidance from the reference protocol, rather than guessed records.
+        const context = await store.getDecisionCapsule(args.projectId, args);
+        return textResult(`Loaded decision capsule for "${args.projectId}".`, { context });
+      }
+      if (['cursor', 'knownRefs', 'goalId'].some(has)) throw new TypeError('cursor, knownRefs and goalId require resultLevel: capsule');
       if (args.detail === 'recovery' && !Object.hasOwn(args, 'sinceRevision') && !Object.hasOwn(args, 'resultLevel')) {
         const recovery = await store.getRecoveryContext(args.projectId);
         return textResult(`Loaded recovery context for "${args.projectId}".`, { recovery });
@@ -363,6 +428,14 @@ async function callTool(name, args = {}) {
       return textResult(result.plan ? 'Forge next-action plan recorded.' : 'Forge evidence retrieved; no new plan recorded.', result);
     }
     case 'forge_evaluate': {
+      if (Object.hasOwn(args, 'coordination')) {
+        validateEnvelope(args.coordination, coordination, 'coordination');
+        // Projection and routing wrapper identity are not the semantic operation
+        // payload. Retrying the same operation can request another projection.
+        const { projectId, resultLevel, ...input } = args;
+        const result = await store.coordinateEvaluation(projectId, input);
+        return textResult(`Forge evaluation recorded: ${result.evaluation.outcome}.`, result);
+      }
       const evaluation = await store.addEvaluation(args.projectId, args);
       return textResult(`Forge evaluation recorded: ${evaluation.outcome}.`, { evaluation });
     }
@@ -422,7 +495,10 @@ async function callTool(name, args = {}) {
     }
     case 'adaptive_initialize_project': {
       const project = await store.initializeProject(args);
-      return textResult(`Adaptive project "${project.projectId}" initialized in ${project.mode} mode.`, { project });
+      // Initialization keeps its legacy wire shape. Full state exposes the
+      // persisted coordination epoch and operation/assessment metadata.
+      const { coordination, ...legacyProject } = project;
+      return textResult(`Adaptive project "${project.projectId}" initialized in ${project.mode} mode.`, { project: legacyProject });
     }
     case 'adaptive_get_state': {
       const project = await store.getProject(args.projectId);
@@ -465,9 +541,29 @@ export async function dispatch(message) {
     try {
       const name = message.params?.name;
       const args = message.params?.arguments || {};
-      return projectControlResult(name, await callTool(name, args), args.resultLevel);
+      const result = await callTool(name, args);
+      const control = ['forge_route', 'forge_plan', 'forge_observe', 'forge_evaluate'].includes(name);
+      if (!result.isError && control && (args.resultLevel === 'capsule' || (name === 'forge_route' && args.includeContext === true))) {
+        if (!args.projectId) {
+          result.structuredContent.decisionCapsule = null;
+          result.structuredContent.contextUnavailable = 'projectId required for persisted decision context';
+        } else {
+          const key = name === 'forge_evaluate' && Object.hasOwn(args, 'coordination') ? 'currentDecisionCapsule' : 'decisionCapsule';
+          result.structuredContent[key] = await store.getDecisionCapsule(args.projectId);
+        }
+      }
+      return projectControlResult(name, result, args.resultLevel);
     }
-    catch (error) { return errorResult(error instanceof Error ? error.message : String(error)); }
+    catch (error) {
+      const result = errorResult(error instanceof Error ? error.message : String(error));
+      if (['REVISION_CONFLICT', 'STATE_EPOCH_CONFLICT'].includes(error?.code) && error.identity) {
+        result.structuredContent = { code: error.code, identity: error.identity, resync: {
+          action: 'Read current full context and reassess the proposal before submitting a new operation; do not automatically retry or merge.',
+          fullContext: { tool: 'forge_context', arguments: { projectId: error.identity.projectId, detail: 'full' } },
+        } };
+      }
+      return result;
+    }
   }
   if (method === 'notifications/initialized' || method?.startsWith('notifications/')) return undefined;
   throw Object.assign(new Error(`Method not found: ${method}`), { code: -32601 });

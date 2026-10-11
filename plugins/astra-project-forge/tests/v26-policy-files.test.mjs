@@ -4,11 +4,11 @@ import { access, readFile } from 'node:fs/promises';
 
 async function text(path) { return readFile(new URL(path, import.meta.url), 'utf8'); }
 
-test('release metadata identifies v2.6.1 and AGPL-3.0-only', async () => {
+test('release metadata identifies v2.6.2 and AGPL-3.0-only', async () => {
   const pkg = JSON.parse(await text('../package.json'));
   const plugin = JSON.parse(await text('../.codex-plugin/plugin.json'));
-  assert.equal(pkg.version, '2.6.1');
-  assert.equal(plugin.version, '2.6.1');
+  assert.equal(pkg.version, '2.6.2');
+  assert.equal(plugin.version, '2.6.2');
   assert.equal(pkg.license, 'AGPL-3.0-only');
   assert.equal(plugin.license, 'AGPL-3.0-only');
   assert.match(plugin.license, /^AGPL-3\.0/);
