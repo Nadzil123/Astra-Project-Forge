@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const DEFAULT_REQUIRED_MODEL = 'gpt-6-astra';
+const DEFAULT_REQUIRED_MODEL = 'gpt-6.1-sol';
 
 const normalize = value => String(value ?? '').trim().toLowerCase();
 const requiredModel = normalize(process.env.ASTRA_REQUIRED_MODEL) || DEFAULT_REQUIRED_MODEL;
