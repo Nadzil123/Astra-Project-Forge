@@ -1,0 +1,111 @@
+{
+  "name": "Native Verification",
+  "on": {
+    "workflow_dispatch": {
+      "inputs": {
+        "candidate_sha": {
+          "description": "Same-repository full commit SHA (empty uses dispatch SHA)",
+          "required": false,
+          "type": "string",
+          "default": ""
+        }
+      }
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "verify": {
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 20,
+      "env": {
+        "CANDIDATE_SHA": "${{ inputs.candidate_sha || github.sha }}"
+      },
+      "steps": [
+        {
+          "name": "Validate candidate SHA",
+          "id": "validate",
+          "shell": "bash",
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nmkdir -p \"$logdir\"\nif [[ \"$CANDIDATE_SHA\" =~ ^[0-9a-f]{40}$ ]]; then\n  printf '0\\n' > \"$logdir/validate.exit-code\"\nelse\n  printf 'Candidate SHA must be full lowercase 40-hex.\\n' > \"$logdir/validate.stderr.log\"\n  printf '1\\n' > \"$logdir/validate.exit-code\"\n  exit 1\nfi"
+        },
+        {
+          "name": "Checkout candidate",
+          "id": "checkout",
+          "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "with": {
+            "ref": "${{ env.CANDIDATE_SHA }}",
+            "persist-credentials": false,
+            "fetch-depth": 1,
+            "set-safe-directory": false
+          }
+        },
+        {
+          "name": "Set up Node",
+          "id": "node",
+          "uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+          "with": {
+            "node-version": "22"
+          }
+        },
+        {
+          "name": "Verify source identity and record metadata",
+          "id": "source",
+          "shell": "bash",
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\n  set -e\n  actual_sha=$(git rev-parse HEAD)\n  printf 'sha=%s\\n' \"$actual_sha\"\n  test \"$actual_sha\" = \"$CANDIDATE_SHA\"\n  git diff --exit-code\n  git diff --cached --exit-code\n  node -p 'JSON.stringify({node:process.version,platform:process.platform,arch:process.arch})'\n  sha256sum plugins/astra-project-forge/LICENSE plugins/astra-project-forge/NOTICE.md plugins/astra-project-forge/ATTRIBUTION.md\n) > \"$logdir/source.stdout.log\" 2> \"$logdir/source.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/source.exit-code\"\ntail -n 40 \"$logdir/source.stdout.log\" \"$logdir/source.stderr.log\"\nexit \"$status\""
+        },
+        {
+          "name": "Validate CI configuration",
+          "id": "configuration",
+          "if": "${{ always() && steps.source.outcome == 'success' }}",
+          "working-directory": ".",
+          "shell": "bash",
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\nnode --test tests/ci-workflow.test.mjs\n) > \"$logdir/configuration.stdout.log\" 2> \"$logdir/configuration.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/configuration.exit-code\"\ntail -n 40 \"$logdir/configuration.stdout.log\" \"$logdir/configuration.stderr.log\"\nexit \"$status\""
+        },
+        {
+          "name": "Check plugin syntax",
+          "id": "check",
+          "if": "${{ always() && steps.source.outcome == 'success' }}",
+          "working-directory": "plugins/astra-project-forge",
+          "shell": "bash",
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\nnpm run check\n) > \"$logdir/check.stdout.log\" 2> \"$logdir/check.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/check.exit-code\"\ntail -n 40 \"$logdir/check.stdout.log\" \"$logdir/check.stderr.log\"\nexit \"$status\""
+        },
+        {
+          "name": "Run complete plugin tests",
+          "id": "tests",
+          "if": "${{ always() && steps.source.outcome == 'success' }}",
+          "working-directory": "plugins/astra-project-forge",
+          "shell": "bash",
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\nnpm test\n) > \"$logdir/tests.stdout.log\" 2> \"$logdir/tests.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/tests.exit-code\"\ntail -n 40 \"$logdir/tests.stdout.log\" \"$logdir/tests.stderr.log\"\nexit \"$status\""
+        },
+        {
+          "name": "Run deterministic efficiency benchmark",
+          "id": "benchmark",
+          "if": "${{ always() && steps.source.outcome == 'success' }}",
+          "working-directory": "plugins/astra-project-forge",
+          "shell": "bash",
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\nnpm run benchmark:efficiency\n) > \"$logdir/benchmark.stdout.log\" 2> \"$logdir/benchmark.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/benchmark.exit-code\"\ntail -n 40 \"$logdir/benchmark.stdout.log\" \"$logdir/benchmark.stderr.log\"\nexit \"$status\""
+        },
+        {
+          "name": "Verify tracked source remains clean",
+          "id": "clean",
+          "if": "${{ always() && steps.source.outcome == 'success' }}",
+          "shell": "bash",
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\n  set -e\n  git diff --exit-code\n  git diff --cached --exit-code\n) > \"$logdir/clean.stdout.log\" 2> \"$logdir/clean.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/clean.exit-code\"\ntail -n 40 \"$logdir/clean.stdout.log\" \"$logdir/clean.stderr.log\"\nexit \"$status\""
+        },
+        {
+          "name": "Upload native verification logs",
+          "id": "artifact",
+          "if": "${{ always() }}",
+          "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "with": {
+            "name": "native-verification",
+            "path": "${{ runner.temp }}/forge-verification/",
+            "retention-days": 7,
+            "if-no-files-found": "error"
+          }
+        }
+      ]
+    }
+  }
+}
