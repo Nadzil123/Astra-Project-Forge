@@ -11,7 +11,7 @@ const workflowPath = join(root, '.github/workflows/verify.yml');
 const sha = 'a'.repeat(40);
 const plugin = 'plugins/astra-project-forge';
 const gates = [
-  ['configuration', 'node --test tests/ci-workflow.test.mjs', '.'],
+  ['configuration', 'node --test tests/ci-workflow.test.mjs tests/ci-portability.test.mjs', '.'],
   ['check', 'npm run check', plugin],
   ['tests', 'npm test', plugin],
   ['benchmark', 'npm run benchmark:efficiency', plugin],
@@ -23,7 +23,7 @@ function run(step, env = {}, prefix = '') {
     mkdirSync(join(temporary, 'forge-verification'));
     const result = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', `${prefix}\n${step.run}`], {
       cwd: root,
-      env: { PATH: process.env.PATH, RUNNER_TEMP: temporary, CANDIDATE_SHA: sha, ...env },
+      env: { PATH: process.env.PATH, RUNNER_TEMP: temporary, CANDIDATE_SHA: sha, VERIFY_PORTABILITY: 'false', ...env },
       encoding: 'utf8',
       timeout: 10_000,
     });
@@ -53,14 +53,49 @@ test('native verification workflow exists and enforces its execution contract', 
     assert.equal(workflow.name, 'Native Verification');
     assert.deepEqual(workflow.on, { workflow_dispatch: { inputs: {
       candidate_sha: { description: 'Same-repository full commit SHA (empty uses dispatch SHA)', required: false, type: 'string', default: '' },
+      verify_portability: { description: 'Also verify fresh plugin source from the exact candidate commit', required: false, type: 'boolean', default: false },
     } } });
     assert.deepEqual(workflow.permissions, { contents: 'read' });
     assert.deepEqual(Object.keys(workflow.jobs), ['verify']);
     assert.deepEqual(Object.keys(job).sort(), ['env', 'runs-on', 'steps', 'timeout-minutes']);
     assert.equal(job['runs-on'], 'ubuntu-24.04');
     assert.equal(job['timeout-minutes'], 20);
-    assert.deepEqual(job.env, { CANDIDATE_SHA: '${{ inputs.candidate_sha || github.sha }}' });
-    assert.deepEqual(steps.map(value => value.id), ['validate', 'checkout', 'node', 'source', ...gates.map(([id]) => id), 'clean', 'artifact']);
+    assert.deepEqual(job.env, { CANDIDATE_SHA: '${{ inputs.candidate_sha || github.sha }}', VERIFY_PORTABILITY: '${{ inputs.verify_portability }}' });
+    assert.deepEqual(steps.map(value => value.id), ['validate', 'checkout', 'node', 'source', ...gates.map(([id]) => id), 'clean', 'portability', 'artifact']);
+  });
+
+  await t.test('validates the explicit boolean before checkout without evaluating input as shell', () => {
+    for (const value of ['true', 'false', '', 'True', '1', 'false\n', '$(exit 9)', 'true; exit 9']) {
+      const result = run(step('validate'), { VERIFY_PORTABILITY: value });
+      const expected = ['true', 'false'].includes(value) ? 0 : 1;
+      assert.equal(result.status, expected, JSON.stringify(value));
+      assert.equal(result.logs['validate.exit-code'], `${expected}\n`);
+      if (expected !== 0) assert.match(result.logs['validate.stderr.log'], /boolean|true.*false/i);
+    }
+  });
+
+  await t.test('optional portability gate runs after normal gates regardless of their outcomes', () => {
+    const gate = step('portability');
+    assert.equal(gate.if, "${{ always() && steps.source.outcome == 'success' && env.VERIFY_PORTABILITY == 'true' }}");
+    assert.ok(steps.indexOf(gate) > steps.indexOf(step('clean')));
+    assert.ok(gate.run.split('\n').includes('node .github/scripts/verify-portability.mjs'));
+    for (const source of ['success', 'failure', 'skipped']) {
+      for (const enabled of ['true', 'false']) {
+        // Evaluate the allowed condition grammar even with a prior failed gate.
+        const expression = gate.if.slice(3, -2).replace('always()', 'true')
+          .replace('steps.source.outcome', JSON.stringify(source))
+          .replace('env.VERIFY_PORTABILITY', JSON.stringify(enabled));
+        assert.equal(Function(`return (${expression})`)(), source === 'success' && enabled === 'true');
+      }
+    }
+    for (const status of [0, 7]) {
+      const result = run(gate, { COMMAND_EXIT: String(status) },
+        'node() { printf "full-out\\n"; printf "full-err\\n" >&2; return "$COMMAND_EXIT"; }');
+      assert.equal(result.status, status);
+      assert.equal(result.logs['portability.stdout.log'], 'full-out\n');
+      assert.equal(result.logs['portability.stderr.log'], 'full-err\n');
+      assert.equal(result.logs['portability.exit-code'], `${status}\n`);
+    }
   });
 
   await t.test('validates SHA before checkout and never interpolates shell expressions', () => {

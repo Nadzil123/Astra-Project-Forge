@@ -8,6 +8,12 @@
           "required": false,
           "type": "string",
           "default": ""
+        },
+        "verify_portability": {
+          "description": "Also verify fresh plugin source from the exact candidate commit",
+          "required": false,
+          "type": "boolean",
+          "default": false
         }
       }
     }
@@ -20,14 +26,15 @@
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 20,
       "env": {
-        "CANDIDATE_SHA": "${{ inputs.candidate_sha || github.sha }}"
+        "CANDIDATE_SHA": "${{ inputs.candidate_sha || github.sha }}",
+        "VERIFY_PORTABILITY": "${{ inputs.verify_portability }}"
       },
       "steps": [
         {
           "name": "Validate candidate SHA",
           "id": "validate",
           "shell": "bash",
-          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nmkdir -p \"$logdir\"\nif [[ \"$CANDIDATE_SHA\" =~ ^[0-9a-f]{40}$ ]]; then\n  printf '0\\n' > \"$logdir/validate.exit-code\"\nelse\n  printf 'Candidate SHA must be full lowercase 40-hex.\\n' > \"$logdir/validate.stderr.log\"\n  printf '1\\n' > \"$logdir/validate.exit-code\"\n  exit 1\nfi"
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nmkdir -p \"$logdir\"\nif [[ ! \"$CANDIDATE_SHA\" =~ ^[0-9a-f]{40}$ ]]; then\n  printf 'Candidate SHA must be full lowercase 40-hex.\\n' > \"$logdir/validate.stderr.log\"\n  printf '1\\n' > \"$logdir/validate.exit-code\"\n  exit 1\nfi\ncase \"$VERIFY_PORTABILITY\" in\n  true|false) printf '0\\n' > \"$logdir/validate.exit-code\" ;;\n  *) printf 'Portability boolean must be true or false.\\n' > \"$logdir/validate.stderr.log\"; printf '1\\n' > \"$logdir/validate.exit-code\"; exit 1 ;;\nesac"
         },
         {
           "name": "Checkout candidate",
@@ -60,7 +67,7 @@
           "if": "${{ always() && steps.source.outcome == 'success' }}",
           "working-directory": ".",
           "shell": "bash",
-          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\nnode --test tests/ci-workflow.test.mjs\n) > \"$logdir/configuration.stdout.log\" 2> \"$logdir/configuration.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/configuration.exit-code\"\ntail -n 40 \"$logdir/configuration.stdout.log\" \"$logdir/configuration.stderr.log\"\nexit \"$status\""
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\nnode --test tests/ci-workflow.test.mjs tests/ci-portability.test.mjs\n) > \"$logdir/configuration.stdout.log\" 2> \"$logdir/configuration.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/configuration.exit-code\"\ntail -n 40 \"$logdir/configuration.stdout.log\" \"$logdir/configuration.stderr.log\"\nexit \"$status\""
         },
         {
           "name": "Check plugin syntax",
@@ -92,6 +99,13 @@
           "if": "${{ always() && steps.source.outcome == 'success' }}",
           "shell": "bash",
           "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\n  set -e\n  git diff --exit-code\n  git diff --cached --exit-code\n) > \"$logdir/clean.stdout.log\" 2> \"$logdir/clean.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/clean.exit-code\"\ntail -n 40 \"$logdir/clean.stdout.log\" \"$logdir/clean.stderr.log\"\nexit \"$status\""
+        },
+        {
+          "name": "Verify fresh committed plugin source",
+          "id": "portability",
+          "if": "${{ always() && steps.source.outcome == 'success' && env.VERIFY_PORTABILITY == 'true' }}",
+          "shell": "bash",
+          "run": "logdir=\"$RUNNER_TEMP/forge-verification\"\nset +e\n(\nnode .github/scripts/verify-portability.mjs\n) > \"$logdir/portability.stdout.log\" 2> \"$logdir/portability.stderr.log\"\nstatus=$?\nprintf '%s\\n' \"$status\" > \"$logdir/portability.exit-code\"\ntail -n 40 \"$logdir/portability.stdout.log\" \"$logdir/portability.stderr.log\"\nexit \"$status\""
         },
         {
           "name": "Upload native verification logs",
