@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-const DEFAULT_REQUIRED_MODEL = 'gpt-6.1-sol';
+import { readModelEligibility, isEligibleModel } from '../server/model-policy.mjs';
 
 const normalize = value => String(value ?? '').trim().toLowerCase();
-const requiredModel = normalize(process.env.ASTRA_REQUIRED_MODEL) || DEFAULT_REQUIRED_MODEL;
-const allowedModels = [...new Set([requiredModel, ...String(process.env.ASTRA_ALLOWED_MODELS || '').split(',').map(normalize).filter(Boolean)])];
+const eligibility = readModelEligibility(process.env);
+const { requiredModel, allowedModels } = eligibility;
 
 function write(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -15,7 +15,7 @@ function gateStatus(model) {
   return {
     activeModel,
     requiredModel,
-    eligible: allowedModels.includes(activeModel),
+    eligible: isEligibleModel(eligibility, activeModel),
     allowedModels,
   };
 }
@@ -31,7 +31,10 @@ function contextFor(input) {
     return `${prefix} Codex reports active model slug \`${shownActive}\`; configured required slug is \`${requiredModel}\`; accepted slugs are ${acceptedModels.map(model => `\`${model}\``).join(', ')}. Gate status: ELIGIBLE. Astra Project Forge may activate automatically when the task benefits from persistent project state, iterative experimentation, verification, uncertainty tracking, or long-horizon continuity in any domain. No keyword, exact prompt, or explicit plugin mention is required. If the task qualifies, apply the Astra Project Forge skill and its MCP tools. Do not activate it for trivial one-shot tasks that gain nothing from persistent state or adaptive iteration.`;
   }
 
-  return `${prefix} Codex reports active model slug \`${shownActive}\`; configured required slug is \`${requiredModel}\`; accepted slugs are ${acceptedModels.map(model => `\`${model}\``).join(', ')}. Gate status: NOT ELIGIBLE. Do not activate Astra Project Forge and do not invoke its MCP tools in this turn. If the user's task would otherwise benefit from Astra Project Forge, ask the user whether they want to switch to \`${requiredModel}\`. Do not claim you switched models yourself; model selection is controlled by the user or host.`;
+  const switchTarget = acceptedModels.length === 1
+    ? `\`${requiredModel}\``
+    : `one of the configured eligible models (${acceptedModels.map(model => `\`${model}\``).join(', ')})`;
+  return `${prefix} Codex reports active model slug \`${shownActive}\`; configured required slug is \`${requiredModel}\`; accepted slugs are ${acceptedModels.map(model => `\`${model}\``).join(', ')}. Gate status: NOT ELIGIBLE. Do not activate Astra Project Forge and do not invoke its MCP tools in this turn. If the user's task would otherwise benefit from Astra Project Forge, ask the user whether they want to switch to ${switchTarget}. Do not claim you switched models yourself; model selection is controlled by the user or host.`;
 }
 
 function handle(input) {
@@ -65,7 +68,7 @@ function handle(input) {
         permissionDecision: 'deny',
         permissionDecisionReason: acceptedModels.length === 1
           ? `Astra Project Forge requires ${requiredModel}; Codex reports ${activeModel || 'unknown'}. Switch models in Codex before using Astra tools.`
-          : `Astra Project Forge requires one of the configured Astra models (${acceptedModels.join(', ')}); Codex reports ${activeModel || 'unknown'}. Switch models in Codex before using Astra tools.`,
+          : `Astra Project Forge requires one of the configured eligible models (${acceptedModels.join(', ')}); Codex reports ${activeModel || 'unknown'}. Switch models in Codex before using Astra tools.`,
       },
     };
   }

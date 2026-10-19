@@ -8,12 +8,20 @@ import { ProjectStore, routeWithEfficiency, BUDGET_OVERRIDE_CATEGORIES } from '.
 import { routeTask } from './adaptive-router.mjs';
 import { projectControlResult } from './control-results.mjs';
 import { selectCapabilities, validateHostCapabilities } from './host-capabilities.mjs';
+import { readModelEligibility, readRoutingMode, isEligibleModel } from './model-policy.mjs';
+import { createAdvisoryHostAdapter } from './model-host-adapter.mjs';
+import { modelRoutingSchemaV1, validateModelRoutingRequest } from './model-routing-schema.mjs';
+import { buildModelRoutingSnapshot, recommendModel } from './model-router.mjs';
+import { makeEvidenceKey } from './evidence-cache.mjs';
 
 const SERVER_NAME = 'astra-project-forge';
 const SERVER_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 const dataDir = process.env.ASTRA_PROJECT_FORGE_DATA_DIR || process.env.PLUGIN_DATA || path.join(os.homedir(), '.astra-project-forge');
 const store = new ProjectStore(dataDir);
+const routingMode = readRoutingMode(process.env);
+const hostAdapter = createAdvisoryHostAdapter(readModelEligibility(process.env));
+const routingRuntime = hostAdapter.describe();
 
 const objectSchema = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const str = description => ({ type: 'string', description });
@@ -216,6 +224,7 @@ const forgeTools = [
       expectedIterations: integer('Expected number of adaptive iterations.', 0, 100),
       ...routingEfficiencyFields, cacheRequest, resultLevel: controlResultLevel,
       includeContext: bool('Opt into a decision capsule in this routing response.'), hostCapabilities,
+      ...(routingMode === 'advisory-v1' ? { modelRouting: modelRoutingSchemaV1 } : {}),
     }, ['complexity']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
   },
@@ -351,9 +360,31 @@ async function callTool(name, args = {}) {
       validateOptionalFields(args, { includeContext: bool('Include decision context') });
       if (Object.hasOwn(args, 'hostCapabilities')) validateHostCapabilities(args.hostCapabilities);
       if (Object.hasOwn(args, 'cacheRequest') && !args.projectId) throw new TypeError('cacheRequest requires projectId');
-      const result = args.projectId
-        ? await store.routeProject(args.projectId, args)
-        : { route: routeWithEfficiency(args), noticeRequired: false, deepNoticeRequired: false };
+      let result;
+      if (Object.hasOwn(args, 'modelRouting')) {
+        const request = validateModelRoutingRequest(args.modelRouting, { projectId: args.projectId });
+        if (args.projectId) result = await store.routeProjectWithModelAdvice(args.projectId, args, routingRuntime);
+        else {
+          const snapshot = buildModelRoutingSnapshot(null, request, args);
+          const modelAdvice = recommendModel(snapshot, request, routingRuntime);
+          const complete = modelAdvice.action === 'COMPLETE' && modelAdvice.policyAction === 'COMPLETE';
+          result = { route: routeWithEfficiency({ ...args,
+            successCriteriaSatisfied: complete, evidenceSufficient: complete,
+            contradictionRemaining: !complete, meaningfulRiskRemaining: !complete,
+          }), noticeRequired: false, deepNoticeRequired: false, modelAdvice };
+        }
+        const advice = result.modelAdvice;
+        const reportedModel = request.currentModel?.trim().toLowerCase();
+        if (!result.replayed && advice.action === 'REQUEST_USER_CHOICE'
+          && advice.recommendedModel !== null && advice.recommendedModel !== reportedModel
+          && isEligibleModel(routingRuntime.eligibility, advice.recommendedModel)) {
+          result.handoffRequest = hostAdapter.prepareHandoff(advice, result.modelHandoff ?? null);
+        }
+      } else {
+        result = args.projectId
+          ? await store.routeProject(args.projectId, args)
+          : { route: routeWithEfficiency(args), noticeRequired: false, deepNoticeRequired: false };
+      }
       const { route, noticeRequired, deepNoticeRequired } = result;
       if (Object.hasOwn(args, 'hostCapabilities')) result.capabilitySelection = selectCapabilities({ stage: 'route', hostCapabilities: args.hostCapabilities });
       const noticeText = noticeRequired || deepNoticeRequired ? ' Usage notice acknowledgement is required before proceeding with the indicated Forge intensity.' : '';
@@ -531,7 +562,8 @@ export async function dispatch(message) {
   const method = message?.method;
   if (method === 'initialize') return {
     protocolVersion: message.params?.protocolVersion || DEFAULT_PROTOCOL_VERSION,
-    capabilities: { tools: { listChanged: false } },
+    capabilities: { tools: { listChanged: false }, ...(routingMode === 'advisory-v1'
+      ? { experimental: { modelRouting: { version: 1, mode: 'advisory-v1' } } } : {}) },
     serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
     instructions: 'Use adaptive routing before substantial qualifying work when budget is unclear. Prefer selective project context over full history, use specialized installed capabilities only when they match the task, and persist only evidence, hypotheses, experiment results, checkpoints, and verified lessons that improve continuity. Workflow budgets are not actual model-token budgets. Do not claim model-weight retraining or permanent self-learning from these records.'
   };
@@ -540,7 +572,14 @@ export async function dispatch(message) {
   if (method === 'tools/call') {
     try {
       const name = message.params?.name;
-      const args = message.params?.arguments || {};
+      let args = message.params?.arguments || {};
+      if (name === 'forge_route' && Object.hasOwn(args, 'modelRouting')) {
+        if (routingMode !== 'advisory-v1') throw new TypeError('Model routing is disabled; operator startup mode advisory-v1 is required');
+        // Check descriptors before legacy validation or async work can read caller
+        // accessors, then retain a detached copy for routing and projection alike.
+        makeEvidenceKey({ params: args });
+        args = structuredClone(args);
+      }
       const result = await callTool(name, args);
       const control = ['forge_route', 'forge_plan', 'forge_observe', 'forge_evaluate'].includes(name);
       if (!result.isError && control && (args.resultLevel === 'capsule' || (name === 'forge_route' && args.includeContext === true))) {
@@ -548,7 +587,9 @@ export async function dispatch(message) {
           result.structuredContent.decisionCapsule = null;
           result.structuredContent.contextUnavailable = 'projectId required for persisted decision context';
         } else {
-          const key = name === 'forge_evaluate' && Object.hasOwn(args, 'coordination') ? 'currentDecisionCapsule' : 'decisionCapsule';
+          const currentContext = (name === 'forge_evaluate' && Object.hasOwn(args, 'coordination'))
+            || (name === 'forge_route' && result.structuredContent.replayed === true);
+          const key = currentContext ? 'currentDecisionCapsule' : 'decisionCapsule';
           result.structuredContent[key] = await store.getDecisionCapsule(args.projectId);
         }
       }

@@ -1,0 +1,123 @@
+{
+  "label": "Deterministic synthetic fixture validation; not provider measurements or savings",
+  "manifest": {
+    "version": 1,
+    "campaignId": "synthetic-arithmetic",
+    "provenance": { "kind": "synthetic", "reference": "fixture:trace-cases-v1" },
+    "tasks": [
+      { "taskId": "one", "category": "ordinary-debugging", "criticality": "ordinary" },
+      { "taskId": "two", "category": "risk-weighted-verification", "criticality": "critical" }
+    ],
+    "strategies": ["fixture-control"],
+    "repetitions": [1],
+    "controls": {
+      "sourceReference": "fixture:frozen-source",
+      "taskInputsReference": "fixture:frozen-inputs",
+      "promptReference": "fixture:frozen-prompt",
+      "graderReference": "fixture:independent-grader",
+      "policyReference": "fixture:frozen-policy",
+      "dependenciesReference": "fixture:dependencies",
+      "permissionsReference": "fixture:permissions",
+      "toolSchemaReference": "fixture:tool-schema",
+      "eligibilityReference": "fixture:eligibility",
+      "featureFlagsReference": "fixture:feature-flags"
+    }
+  },
+  "traces": [
+    {
+      "version": 1, "campaignId": "synthetic-arithmetic", "taskId": "one",
+      "repetition": 1, "strategy": "fixture-control", "runId": "run-one",
+      "provenance": { "kind": "synthetic", "reference": "fixture:run-one" },
+      "attempts": [
+        {
+          "id": "a", "requestedModel": "fixture-sol", "observedModel": "fixture-sol",
+          "effort": "high", "tier": "standard", "cacheState": "cold",
+          "startedAt": "2026-10-16T00:00:00Z", "endedAt": "2026-10-16T00:00:01Z",
+          "durationMs": 1000, "outcome": "error", "providerFingerprint": null,
+          "contextReference": "fixture:context-a", "seed": null,
+          "metrics": { "toolCalls": 0, "duplicateToolCalls": 0, "toolBytes": null, "coordinationBytes": 12, "contextBytes": 100, "contextExpansions": 0, "handoffs": 1, "retries": 0, "recoveryCorrect": null },
+          "artifacts": [{ "reference": "fixture:failed-artifact", "hash": null }],
+          "usage": null
+        },
+        {
+          "id": "b", "requestedModel": "fixture-astra", "observedModel": "fixture-astra",
+          "effort": "high", "tier": "standard", "cacheState": "warm",
+          "startedAt": "2026-10-16T00:00:01Z", "endedAt": "2026-10-16T00:00:03Z",
+          "durationMs": 2000, "outcome": "success", "providerFingerprint": null,
+          "contextReference": "fixture:context-b", "seed": null,
+          "metrics": { "toolCalls": 2, "duplicateToolCalls": 0, "toolBytes": null, "coordinationBytes": 20, "contextBytes": 200, "contextExpansions": 1, "handoffs": 0, "retries": 1, "recoveryCorrect": true },
+          "artifacts": [{ "reference": "fixture:verified-artifact", "hash": "fixture-sha256" }],
+          "usage": {
+            "sourceReference": "fixture:usage-b", "inputTokens": 100, "outputTokens": 50,
+            "reasoningTokens": 20, "cacheReadTokens": 40, "cacheWriteTokens": 10,
+            "subsetOf": { "reasoningTokens": "outputTokens", "cacheReadTokens": "inputTokens", "cacheWriteTokens": "inputTokens" }
+          }
+        }
+      ],
+      "verification": {
+        "grader": { "reference": "fixture:independent-grader", "independent": true, "kind": "executable" },
+        "mandatoryCriteria": [{ "id": "artifact", "passed": true }],
+        "regressions": [{ "id": "required-suite", "passed": true }],
+        "criticalFailure": false, "falseSuccess": false, "verified": true,
+        "provenance": { "kind": "synthetic", "reference": "fixture:grader-one" }
+      },
+      "chargeCoverage": {
+        "required": [
+          { "id": "a-provider", "scope": "attempt", "reference": "a", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "a-tools", "scope": "tool", "reference": "a", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "a-handoff", "scope": "handoff", "reference": "a", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "b-provider", "scope": "attempt", "reference": "b", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "b-tools", "scope": "tool", "reference": "b", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "b-handoff", "scope": "handoff", "reference": "b", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "setup", "scope": "setup", "reference": "trajectory", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "grading", "scope": "grading", "reference": "verification", "accountingSystem": "api_money", "currency": "USD" }
+        ],
+        "exclusions": []
+      },
+      "resourceCharges": [
+        { "id": "charge-a", "scope": "attempt", "reference": "a", "accountingSystem": "api_money", "currency": "USD", "amount": "2", "includes": ["a-provider", "a-tools", "a-handoff", "setup", "grading"], "provenance": { "kind": "synthetic", "reference": "fixture:charge-a" } },
+        { "id": "charge-b", "scope": "attempt", "reference": "b", "accountingSystem": "api_money", "currency": "USD", "amount": "3", "includes": ["b-provider", "b-tools", "b-handoff"], "provenance": { "kind": "synthetic", "reference": "fixture:charge-b" } }
+      ]
+    },
+    {
+      "version": 1, "campaignId": "synthetic-arithmetic", "taskId": "two",
+      "repetition": 1, "strategy": "fixture-control", "runId": "run-two",
+      "provenance": { "kind": "synthetic", "reference": "fixture:run-two" },
+      "attempts": [
+        {
+          "id": "c", "requestedModel": "fixture-sol", "observedModel": "fixture-sol",
+          "effort": "medium", "tier": "priority", "cacheState": "unknown",
+          "startedAt": null, "endedAt": null, "durationMs": 3000, "outcome": "timeout",
+          "providerFingerprint": null, "contextReference": null, "seed": null,
+          "metrics": { "toolCalls": null, "duplicateToolCalls": null, "toolBytes": null, "coordinationBytes": null, "contextBytes": null, "contextExpansions": null, "handoffs": null, "retries": null, "recoveryCorrect": null },
+          "artifacts": [], "usage": null
+        }
+      ],
+      "verification": {
+        "grader": { "reference": "fixture:independent-grader", "independent": true, "kind": "executable" },
+        "mandatoryCriteria": [{ "id": "artifact", "passed": false }],
+        "regressions": [{ "id": "required-suite", "passed": true }],
+        "criticalFailure": false, "falseSuccess": false, "verified": false,
+        "provenance": { "kind": "synthetic", "reference": "fixture:grader-two" }
+      },
+      "chargeCoverage": {
+        "required": [
+          { "id": "c-provider", "scope": "attempt", "reference": "c", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "c-tools", "scope": "tool", "reference": "c", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "c-handoff", "scope": "handoff", "reference": "c", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "setup", "scope": "setup", "reference": "trajectory", "accountingSystem": "api_money", "currency": "USD" },
+          { "id": "grading", "scope": "grading", "reference": "verification", "accountingSystem": "api_money", "currency": "USD" }
+        ], "exclusions": []
+      },
+      "resourceCharges": [
+        { "id": "charge-c", "scope": "attempt", "reference": "c", "accountingSystem": "api_money", "currency": "USD", "amount": "5", "includes": ["c-provider", "c-tools", "c-handoff", "setup", "grading"], "provenance": { "kind": "synthetic", "reference": "fixture:charge-c" } }
+      ]
+    }
+  ],
+  "invalidAmounts": ["-1", "NaN", "Infinity", "1e3", ".2", "2.", " 1", 2, -1, 1e300],
+  "exactSums": [
+    { "amounts": ["0.1", "0.2", "0"], "total": "0.3" },
+    { "amounts": ["9007199254740993.01", "0.09", "0"], "total": "9007199254740993.1" },
+    { "amounts": ["0", "0", "0"], "total": "0" }
+  ]
+}

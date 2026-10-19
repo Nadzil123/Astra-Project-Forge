@@ -12,6 +12,7 @@ import { routeTask } from './adaptive-router.mjs';
 import { selectDelta, compactContext, progressiveResult } from './context-efficiency.mjs';
 import { normalizeEfficiencyLedger, applyEfficiencyEvent } from './efficiency-ledger.mjs';
 import { makeEvidenceKey, invalidateByChangedDependency } from './evidence-cache.mjs';
+import { prepareModelRoutingArgs, routeModelTransition } from './model-routing-state.mjs';
 import { recordRevision, latestRecordRevision, stampChangedRecords } from './agent-state.mjs';
 import { createGoalRecord, refreshBlockedGoals, updateGoalRecord, createClaimRecord, updateClaimRecord, createPlanRecord, createEvaluationRecord, createFailedStrategyRecord, createAdaptationRecord } from './agent-state.mjs';
 
@@ -95,6 +96,35 @@ function recordEvidenceReuse(project, record) {
     type: 'reusedEvidence', amount: 1,
     provenance: { source: 'store', reference: `reuseEvidence:${record.key}` },
   });
+}
+
+function applyRouteWorkflow(project, input, query = actionCacheQuery(input)) {
+  const route = routeWithEfficiency(input, project.efficiency);
+  if (query && route.risk === 'high') query.risk = 'high';
+  const independentValue = input.candidateHasIndependentValue === true && route.usefulReasons.length > 0;
+  const evidenceRecord = query && !independentValue ? reusableEvidence(project, query) : null;
+  if (evidenceRecord) {
+    recordEvidenceReuse(project, evidenceRecord);
+    if (!route.completionRecommended) route.efficiencyDecision = 'reuse';
+    route.requiresJustification = false;
+  }
+  const current = input.currentLevel ?? project.efficiency.reasoningLevel;
+  const direction = REASONING_LEVELS.indexOf(route.reasoningRecommendation.level) - REASONING_LEVELS.indexOf(current);
+  project.efficiency.reasoningLevel = route.reasoningRecommendation.level;
+  project.efficiency.recentlyEscalated = direction > 0 || (direction === 0
+    && (input.recentlyEscalated ?? project.efficiency.recentlyEscalated)
+    && input.uncertaintyResolved !== true && input.riskReducedMaterially !== true);
+  project.efficiency.recentlyDeescalated = direction < 0 || (direction === 0
+    && (input.recentlyDeescalated ?? project.efficiency.recentlyDeescalated));
+  project.efficiency.lastRoute = { ...route, completedCycles: input.completedCycles ?? project.efficiency.lastRoute?.completedCycles ?? 0 };
+  project.usage.lastProfile = route.profile;
+  project.usage.lastUsageImpact = route.usageImpact;
+  return {
+    route,
+    noticeRequired: project.usage.firstUseNoticeAcknowledged !== true,
+    deepNoticeRequired: route.profile === 'deep' && project.usage.deepWarningAcknowledged !== true,
+    ...(query ? { evidenceRecord } : {}),
+  };
 }
 
 function actionCacheQuery(input) {
@@ -369,34 +399,17 @@ export class ProjectStore {
     return this.#withProject(projectId, async () => {
       const query = actionCacheQuery(input);
       const project = await this.getProject(projectId);
-      const route = routeWithEfficiency(input, project.efficiency);
-      if (query && route.risk === 'high') query.risk = 'high';
-      const independentValue = input.candidateHasIndependentValue === true && route.usefulReasons.length > 0;
-      const evidenceRecord = query && !independentValue ? reusableEvidence(project, query) : null;
-      if (evidenceRecord) {
-        recordEvidenceReuse(project, evidenceRecord);
-        if (!route.completionRecommended) route.efficiencyDecision = 'reuse';
-        route.requiresJustification = false;
-      }
-      const current = input.currentLevel ?? project.efficiency.reasoningLevel;
-      const direction = REASONING_LEVELS.indexOf(route.reasoningRecommendation.level) - REASONING_LEVELS.indexOf(current);
-      project.efficiency.reasoningLevel = route.reasoningRecommendation.level;
-      project.efficiency.recentlyEscalated = direction > 0 || (direction === 0
-        && (input.recentlyEscalated ?? project.efficiency.recentlyEscalated)
-        && input.uncertaintyResolved !== true && input.riskReducedMaterially !== true);
-      project.efficiency.recentlyDeescalated = direction < 0 || (direction === 0
-        && (input.recentlyDeescalated ?? project.efficiency.recentlyDeescalated));
-      project.efficiency.lastRoute = { ...route, completedCycles: input.completedCycles ?? project.efficiency.lastRoute?.completedCycles ?? 0 };
-      project.usage.lastProfile = route.profile;
-      project.usage.lastUsageImpact = route.usageImpact;
+      const result = applyRouteWorkflow(project, input, query);
       await this.#write(project);
-      return {
-        route,
-        noticeRequired: project.usage.firstUseNoticeAcknowledged !== true,
-        deepNoticeRequired: route.profile === 'deep' && project.usage.deepWarningAcknowledged !== true,
-        ...(query ? { evidenceRecord } : {}),
-      };
+      return result;
     });
+  }
+  async routeProjectWithModelAdvice(projectId, args, runtime) {
+    const input = prepareModelRoutingArgs(projectId, args);
+    const descriptor = structuredClone(runtime);
+    const { result } = await this.transact(projectId, (project, control) =>
+      routeModelTransition(project, input, descriptor, control, applyRouteWorkflow));
+    return result;
   }
   async setReasoningState(projectId, patch = {}) {
     return this.#withProject(projectId, async () => {

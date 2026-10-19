@@ -7,13 +7,45 @@ description: Use when the Astra model gate is eligible and work in any domain ha
 
 ## Model gate and semantic activation
 
-This skill is eligible only when Codex model-gate metadata says **ELIGIBLE**. If it says **NOT ELIGIBLE**, do not activate Forge or call its MCP tools; if Forge would help, ask whether the user wants to switch to the configured Astra model. Never claim to switch models yourself.
+This skill is eligible only when Codex model-gate metadata says **ELIGIBLE**. If it says **NOT ELIGIBLE**, do not activate Forge or call its MCP tools; if Forge would help, ask whether the user wants to switch to a configured eligible model. Never claim to switch models yourself.
+
+The operator default is `gpt-6.1-sol`. Full Forge and all available permitted
+capabilities may be used on Sol or Astra when that model is explicitly eligible
+under the operator policy. Dual eligibility is an independent operator opt-in;
+enabling advice, caller model claims or a recommendation cannot widen the gate.
 
 No keyword or exact prompt is required. Decide from task meaning in **any domain**. Do not activate for trivial one-shot work that gains nothing from continuity, uncertainty tracking, iterative verification, or adaptation.
 
 ## Adaptive routing
 
 Use `forge_route` (or legacy `adaptive_route_task`) when the appropriate intensity is unclear. Choose the smallest useful profile: `off`, `light`, `standard`, or `deep`. The **workflow budget** is soft guidance, not a hard stop; **do not treat it as actual token usage** or hidden reasoning-token control.
+
+The advisory model pilot is off by default. Send `forge_route.modelRouting` only
+after both initialization capability version/mode and the optional tool schema
+confirm support; otherwise omit it and use legacy routing. All 19 tools and
+full/recovery/reference reads stay reachable. Preserve first-use/deep notices and
+budget overrides. Workflow depth, model advice, efficiency policy and actual host
+effort are separate; internal `maximum` is not an API effort or host Ultra mode.
+
+Use current registered evidence for a concrete routing benefit. Repeated failures
+or difficult wording alone do not justify Astra. Caller `currentModel` and source
+identity are reported provenance, not trusted observations. The manual adapter
+cannot switch models/control effort; its handoff has `switched:false`,
+`observedModel:null` and `executionStatus:'not_attempted'`.
+
+After interruption/manual selection, read recovery and full/current reference
+context. Retain original constraints, contradictions/counter-evidence, failures,
+unmet checks and source-only evidence. Exact request/operationId replay recovers
+a historical receipt without writing or authorizing a fresh handoff; a separate
+`currentDecisionCapsule` may reflect an intervening writer. Reconcile current
+epoch/revision and policy before a new operationId for changed input. Never treat
+replay as current completion or a requested model as observed execution.
+
+Rollback disables advice/restores operator eligibility without deleting data.
+Empirical comparison is `not_run`; missing usage/cost stays null. Offline protocol
+validation and synthetic self-tests grant no live campaign/access/spending or
+release authorization. See [operator examples](../../docs/MODEL-ROUTING-PILOT.md)
+and the [final offline contract](../../docs/MODEL-ROUTING-EVALUATION.md).
 
 ## Efficiency First
 

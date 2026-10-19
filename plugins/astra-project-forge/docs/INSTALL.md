@@ -84,20 +84,75 @@ plugin itself. Host plugin installation remains an explicit separate action.
 Default expected model slug:
 
 ```text
-gpt-6-astra
+gpt-6.1-sol
 ```
 
-Override when your Codex build reports another eligible Astra slug:
+This default preserves the upstream user decision in commit
+`3de4dde661b2ae3b4535c98eb1b26a8fdd0dda55` to require `gpt-6.1-sol`.
+It is an eligibility policy, not evidence of universal quality or cost advantages.
+
+Override when your Codex build reports another eligible slug. For Astra-only
+eligibility, explicitly set:
 
 ```bash
-export ASTRA_REQUIRED_MODEL="exact-reported-slug"
+export ASTRA_REQUIRED_MODEL="gpt-6-astra"
 ```
 
-Optionally allow multiple eligible slugs:
+Eligibility and routing advice are independent operator opt-ins. By default,
+only `gpt-6.1-sol` is eligible and routing advice is off. Installing the plugin
+or enabling advice does not make Astra eligible. `ASTRA_REQUIRED_MODEL` can also
+specify another exact host-reported slug.
+
+To explicitly allow both Astra and Sol, an operator can configure:
 
 ```bash
-export ASTRA_ALLOWED_MODELS="gpt-6-astra,gpt-6-astra-alt"
+export ASTRA_ALLOWED_MODELS="gpt-6-astra,gpt-6.1-sol"
 ```
+
+The required slug remains eligible, and additional allowed slugs are trimmed,
+lowercased, and deduplicated. Empty or unknown active identities are ineligible.
+The hook reads the host-reported top-level model; tool arguments cannot override
+operator eligibility. This hook is a host lifecycle guard, not MCP authentication.
+Malformed hook JSON produces a neutral protocol response.
+
+Routing advice has a separate opt-in:
+
+```bash
+export ASTRA_FORGE_MODEL_ROUTING="advisory-v1"
+```
+
+`ASTRA_FORGE_MODEL_ROUTING` accepts only `off` (also the unset default) or
+`advisory-v1`; any other value is a configuration error. Advice cannot widen
+the allowlist or switch the host model. Configuration is read at process
+startup; restart the relevant process after changing settings. The hook uses
+eligibility only and does not depend on the advice flag.
+Sol-default eligibility does not authorize automatic switching; model selection
+remains controlled by the user or host.
+
+These examples do not change installed or global settings. To disable advice,
+remove `ASTRA_FORGE_MODEL_ROUTING` or set it to `off`, retaining the original
+eligibility settings.
+
+Restart after changing startup configuration and keep the same data directory.
+To restore an explicit Astra-only fixture, set `ASTRA_REQUIRED_MODEL=gpt-6-astra`
+and remove `ASTRA_ALLOWED_MODELS`; setting the allowlist alone cannot remove the
+required/default Sol model. Restore the operator's own saved policy for normal
+rollback. No state deletion, downgrade of schemaVersion 2, or receipt rewriting
+is needed. Full/recovery/reference and adaptive reads remain reachable on either
+explicitly eligible model with all 19 tools.
+
+Clients must check both the initialization experimental capability and optional
+`forge_route.modelRouting` schema before using advice; absent/unsupported means
+omit the envelope and keep legacy routing. The manual adapter does not switch
+models, control host effort or observe trusted identity/usage. `maximum` remains
+an internal advisory label, not API effort or host Ultra control.
+
+See the [pilot operator guide](MODEL-ROUTING-PILOT.md) for process-local examples,
+manual handoff/resume, useful work beyond budgets and rollback, and the
+[offline evaluation contract](MODEL-ROUTING-EVALUATION.md) for actual self-test
+and report commands. Empirical comparison is `not_run`; missing metrics remain
+`null`. Offline validation/synthetic results do not authorize live model calls,
+spending or release. This source pilot is not a new release or installed update.
 
 ## State location
 

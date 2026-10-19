@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "campaignId": "model-routing-pilot-draft-v1",
+  "status": "draft",
+  "provenance": { "kind": "imported", "reference": "draft:proposed-contract-no-trajectories-collected" },
+  "freezeCommitment": null,
+  "strategies": ["sol_only", "astra_only", "sol_first_control", "adaptive_evidence"],
+  "repetitions": [1, 2, 3],
+  "schedulingSeed": 20261016,
+  "cacheStratumByRepetition": ["cold", "warm", "cold"],
+  "controls": {
+    "sourceReference": "draft:source-manifests",
+    "taskInputsReference": "draft:task-input-manifests",
+    "promptReference": "draft:prompt-manifests",
+    "graderReference": "draft:independent-grader-manifests",
+    "policyReference": "draft:frozen-evidence-policy",
+    "dependenciesReference": "draft:dependency-versions",
+    "permissionsReference": "draft:common-permissions",
+    "toolSchemaReference": "draft:common-tools",
+    "eligibilityReference": "draft:explicit-dual-eligibility-review-required",
+    "featureFlagsReference": "draft:common-feature-flags"
+  },
+  "arms": [
+    {
+      "strategy": "sol_only", "initialModel": "sol", "escalation": "never",
+      "verificationFloor": ["mandatory_criteria", "required_regressions", "no_critical_false_success", "no_new_critical_failure"],
+      "controls": {
+        "sourceReference": "draft:source-manifests", "taskInputsReference": "draft:task-input-manifests",
+        "promptReference": "draft:prompt-manifests", "graderReference": "draft:independent-grader-manifests",
+        "policyReference": "draft:frozen-evidence-policy", "dependenciesReference": "draft:dependency-versions",
+        "permissionsReference": "draft:common-permissions", "toolSchemaReference": "draft:common-tools",
+        "eligibilityReference": "draft:explicit-dual-eligibility-review-required", "featureFlagsReference": "draft:common-feature-flags"
+      }
+    },
+    {
+      "strategy": "astra_only", "initialModel": "astra", "escalation": "never",
+      "verificationFloor": ["mandatory_criteria", "required_regressions", "no_critical_false_success", "no_new_critical_failure"],
+      "controls": {
+        "sourceReference": "draft:source-manifests", "taskInputsReference": "draft:task-input-manifests",
+        "promptReference": "draft:prompt-manifests", "graderReference": "draft:independent-grader-manifests",
+        "policyReference": "draft:frozen-evidence-policy", "dependenciesReference": "draft:dependency-versions",
+        "permissionsReference": "draft:common-permissions", "toolSchemaReference": "draft:common-tools",
+        "eligibilityReference": "draft:explicit-dual-eligibility-review-required", "featureFlagsReference": "draft:common-feature-flags"
+      }
+    },
+    {
+      "strategy": "sol_first_control", "initialModel": "sol", "escalation": "first_failed_verification_or_unchanged_failed_strategy",
+      "verificationFloor": ["mandatory_criteria", "required_regressions", "no_critical_false_success", "no_new_critical_failure"],
+      "controls": {
+        "sourceReference": "draft:source-manifests", "taskInputsReference": "draft:task-input-manifests",
+        "promptReference": "draft:prompt-manifests", "graderReference": "draft:independent-grader-manifests",
+        "policyReference": "draft:frozen-evidence-policy", "dependenciesReference": "draft:dependency-versions",
+        "permissionsReference": "draft:common-permissions", "toolSchemaReference": "draft:common-tools",
+        "eligibilityReference": "draft:explicit-dual-eligibility-review-required", "featureFlagsReference": "draft:common-feature-flags"
+      }
+    },
+    {
+      "strategy": "adaptive_evidence", "initialModel": "policy", "escalation": "evidence_based",
+      "verificationFloor": ["mandatory_criteria", "required_regressions", "no_critical_false_success", "no_new_critical_failure"],
+      "controls": {
+        "sourceReference": "draft:source-manifests", "taskInputsReference": "draft:task-input-manifests",
+        "promptReference": "draft:prompt-manifests", "graderReference": "draft:independent-grader-manifests",
+        "policyReference": "draft:frozen-evidence-policy", "dependenciesReference": "draft:dependency-versions",
+        "permissionsReference": "draft:common-permissions", "toolSchemaReference": "draft:common-tools",
+        "eligibilityReference": "draft:explicit-dual-eligibility-review-required", "featureFlagsReference": "draft:common-feature-flags"
+      }
+    }
+  ],
+  "policy": { "manifest": null, "tunedOnEvaluation": false },
+  "reviews": { "readinessReference": null, "spendingReference": null, "graderIndependenceReference": null },
+  "calibrationTasks": [{ "taskId": "calibration-not-yet-frozen", "contentIdentity": null, "manifest": null }],
+  "tasks": [
+    { "taskId": "routine-parser", "category": "routine-implementation", "split": "held_out", "criticality": "ordinary",
+      "acceptance": "Parser helper boundary and invalid-input oracle with hidden edge cases.",
+      "requiredChecks": ["parser-boundary", "parser-invalid-input", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "routine-filter", "category": "routine-implementation", "split": "out_of_domain", "criticality": "ordinary",
+      "acceptance": "Deterministic filter with hidden path and type edge cases.",
+      "requiredChecks": ["filter-path-type-oracle", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "debug-span", "category": "ordinary-debugging", "split": "held_out", "criticality": "ordinary",
+      "acceptance": "Original span off-by-one reproduction and negative controls.",
+      "requiredChecks": ["original-span-reproduction", "negative-controls", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "debug-nested-call", "category": "ordinary-debugging", "split": "held_out", "criticality": "ordinary",
+      "acceptance": "Nested-call argument regression and negative controls.",
+      "requiredChecks": ["nested-argument-reproduction", "negative-controls", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "multi-manifest", "category": "multi-file-change", "split": "held_out", "criticality": "ordinary",
+      "acceptance": "Old and new manifest clients retain schema compatibility.",
+      "requiredChecks": ["old-new-client-matrix", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "multi-record", "category": "multi-file-change", "split": "out_of_domain", "criticality": "ordinary",
+      "acceptance": "Producer/consumer schema compatibility and unknown-field preservation.",
+      "requiredChecks": ["producer-consumer-matrix", "unknown-fields", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "ambiguous-permission", "category": "ambiguous-failure", "split": "held_out", "criticality": "ordinary",
+      "acceptance": "Discriminate environment permission from code defect without weakening checks.",
+      "requiredChecks": ["permission-discriminating-probe", "unchanged-test-strength", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "ambiguous-eof", "category": "ambiguous-failure", "split": "held_out", "criticality": "ordinary",
+      "acceptance": "Discriminate EOF from read-boundary failure without weakening checks.",
+      "requiredChecks": ["eof-read-boundary-oracle", "unchanged-test-strength", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "migration-unknown", "category": "state-migration", "split": "held_out", "criticality": "critical",
+      "acceptance": "Preserve unknown fields, byte identities, backups and rollback.",
+      "requiredChecks": ["unknown-fields-backups", "rollback-byte-identities", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "migration-replay", "category": "state-migration", "split": "out_of_domain", "criticality": "critical",
+      "acceptance": "Lost response with concurrent writer, stale-write rejection and exactly-once outcome.",
+      "requiredChecks": ["lost-response-concurrent-writer", "stale-write-rejection", "exactly-once", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "architecture-gate", "category": "architecture", "split": "held_out", "criticality": "critical",
+      "acceptance": "Inventory actual eligibility and host constraints; independently blinded rubric and counterexamples.",
+      "requiredChecks": ["eligibility-host-inventory", "blinded-rubric", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "architecture-layout", "category": "architecture", "split": "out_of_domain", "criticality": "critical",
+      "acceptance": "Storage-layout invariants and feasible migration; independently blinded rubric and counterexamples.",
+      "requiredChecks": ["storage-invariants-migration", "blinded-rubric", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "long-package", "category": "long-agentic-work", "split": "held_out", "criticality": "critical",
+      "acceptance": "Full package repair, final artifact and every required gate.",
+      "requiredChecks": ["final-package-artifact", "all-package-gates", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "long-recovery", "category": "long-agentic-work", "split": "out_of_domain", "criticality": "critical",
+      "acceptance": "Interrupted work-unit recovery preserves original constraints and resource cleanup.",
+      "requiredChecks": ["interrupted-recovery", "original-constraints-cleanup", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "risk-corrupt", "category": "risk-weighted-verification", "split": "held_out", "criticality": "critical",
+      "acceptance": "Superficial passing check with corrupted artifact must fail the independent adversarial oracle.",
+      "requiredChecks": ["corrupt-artifact-oracle", "false-completion-rejection", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null },
+    { "taskId": "risk-counterevidence", "category": "risk-weighted-verification", "split": "held_out", "criticality": "critical",
+      "acceptance": "High-impact change retains older contradictory evidence and all required review/regressions.",
+      "requiredChecks": ["older-counterevidence", "required-review", "required-regressions"], "contentIdentity": null, "frozen": null, "grader": null }
+  ]
+}

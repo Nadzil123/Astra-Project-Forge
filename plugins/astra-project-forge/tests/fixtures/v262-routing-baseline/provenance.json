@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "sourceCommit": "5810aac70953fd4b2c9e7201c7f348e4f454f79c",
+  "sourcePath": "plugins/astra-project-forge",
+  "files": {
+    "server/adaptive-router.mjs": "4e0d6024cd196601c38e36396173a76f625e5cfc5921b7e486991012457b0506",
+    "server/agent-state.mjs": "ebd558fbba290ae12063fc469831475199a320fe052a3f5504f7c133d2885869",
+    "server/context-efficiency.mjs": "5a5ffb92fe64c73ce095d57ac230d0e8c4bbfc99a39fbfdbb6139131c4734f44",
+    "server/control-results.mjs": "c09c551421a6e909a150345b3989a82259339bbfd6733fa75809335493a73ee4",
+    "server/coordination-core.mjs": "1b85ca4932a7a87e03f013214b8c2a0c15381fb0c804da2e746c5aaab3423a59",
+    "server/decision-capsule.mjs": "5e9ccc3ce03a504db21020b030760ad4a6afaabee1340e1a48af3019dc75cc67",
+    "server/efficiency-governor.mjs": "2f296c69cac192b7ee4fe30b479ec57ad0267c23527e810b702f84529b7ab147",
+    "server/efficiency-ledger.mjs": "d86cbab5af9fc480c6e4ad647f9af12060083c57174c517f0daadde6eec532a0",
+    "server/evidence-cache.mjs": "e208520b0b561fb34e31ddbb7060229e0b4ff1e03473f0351c857f127a70f0a5",
+    "server/evidence-records.mjs": "d6220ffc1347b156352174d220149f68ce1d931c107a34c1e297d7dd2c5285fe",
+    "server/host-capabilities.mjs": "08aedb5842d980ddd09372d42ba5fe1f93381a55ad60846323d8e6d2539c33d7",
+    "server/mcp-server.mjs": "ff246de6268c9606a6b2d661db3032b91a76b7ce99be9fc683dcb1ea2b8d14cb",
+    "server/project-persistence.mjs": "d34a566da8630d6fc9de7e73735085a64b2f22bebb249b8f51cfc8f58fc464c5",
+    "server/state-references.mjs": "e94a116c39f0d91d97eef9e38c48a1e805a641cc6d0a7fc346235005529ea602",
+    "server/state-store.mjs": "d87f9c058786cced15e6d0683f196e48aaeadb58eaa15d61c2d68cc294cc1218",
+    "package.json": "5c9a8644ca5a55b87b0307e80573732c64a417476108adaf8e07d5a784b80e7e",
+    "LICENSE": "5132c7f0475b02c8107a2e0f0363e70423c62d2664ab927e76193226e5e05905",
+    "NOTICE.md": "c35cd5c397efd7eb5313a46f8bce86065f92745d1e080fba134e537e4bcfe598",
+    "ATTRIBUTION.md": "74a9857795d90cd3368a73331192f712cc9412d95314eee18ce95486781501a4"
+  }
+}

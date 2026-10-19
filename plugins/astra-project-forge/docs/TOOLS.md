@@ -200,6 +200,135 @@ reported events; inspect `ledger.events` provenance to distinguish them from
 store-observed reuse and plan overrides. Recommendations/context reads never
 manufacture usage, token, cache-hit, billing or savings measurements.
 
+## Optional model routing negotiation
+
+The pilot is off by default. An operator may enable it at server startup with
+`ASTRA_FORGE_MODEL_ROUTING=advisory-v1`. Only then does `initialize` include:
+
+```json
+{"capabilities":{"tools":{"listChanged":false},"experimental":{"modelRouting":{"version":1,"mode":"advisory-v1"}}}}
+```
+
+This is a capabilities excerpt, not the entire initialization response. The
+enabled `forge_route` input schema adds optional `modelRouting`; its existing
+required input remains `complexity`. All nine `forge_*` and ten `adaptive_*`
+tools remain available. `adaptive_route_task` is unchanged. Off mode preserves
+the legacy initialization and tool catalog exactly. Omitted routing metadata
+uses the legacy route even when the pilot is on. Explicit metadata while off
+returns a disabled-feature error before input validation or state writes.
+
+Clients should check both the experimental version/mode and the `forge_route`
+schema before sending metadata. If either is absent or unsupported, omit the
+envelope and use the legacy route. Remember this negotiation for that connection;
+do not repeatedly retry an unsupported envelope against an older server.
+
+Eligibility is independent: `ASTRA_REQUIRED_MODEL` and `ASTRA_ALLOWED_MODELS`
+control the operator policy. The reviewed default permits only `gpt-6.1-sol`.
+Enabling advice does not authorize Astra or expand access. An operator can
+explicitly allow another model through those existing settings. Caller metadata,
+reported current model, preferences, and host claims cannot grant permission.
+`hostCapabilities` still accepts only its three existing boolean fields
+(`deferredDiscovery`, `allowedSubset`, `discoveryAvailable`); model authority
+does not belong in that envelope.
+
+Example `forge_route` arguments for projectless advice:
+
+```json
+{
+  "complexity":"moderate",
+  "modelRouting":{
+    "version":1,
+    "workUnitId":"parser-contract",
+    "sourceIdentity":"source:reviewed-tree-v1",
+    "currentModel":"gpt-6.1-sol",
+    "userPreference":"auto",
+    "forbiddenModels":[],
+    "benefit":null,
+    "nextHypothesis":null,
+    "stableBoundary":false,
+    "receiverCanResolveReferences":true
+  }
+}
+```
+
+The response retains the legacy route/notices and adds `modelAdvice`. A routine
+Sol report produces `action:"KEEP_SOL"`, `policyAction:"KEEP_SOL"`, and
+`recommendedModel:"gpt-6.1-sol"`. Advice includes reasons, unmet criteria,
+reference provenance, `verificationPreserved:true`, `advisory:true`,
+`executionStatus:"not_attempted"`, `observedModel:null`,
+`remainingVerifiedCost:null`, and `calibration:"not_measured"`.
+Projectless `assessmentSource` is `unknown`; persisted criteria and source-bound
+verification are unavailable. Projectless advice never recommends completion
+or establishes a reference-dependent escalation benefit. `operationId` and
+`expectedState` are forbidden without a project.
+
+For a stateful call, add `projectId` alongside `complexity` and add the following
+fields inside `modelRouting`, using the current full-state identity:
+
+```json
+{"operationId":"route-parser-1","expectedState":{"projectId":"parser","epoch":"<current epoch>","revision":12}}
+```
+
+The store commits workflow routing and advice atomically and returns historical
+`identity`, `replayed:false`, and optional `modelHandoff`. The envelope rejects
+unknown fields, unsupported versions, unsafe revisions, and malformed references
+before mutation. Direct opt-in calls also require the complete arguments to be
+JSON data; getters are rejected without execution. Source identity and persisted
+assessments remain reported provenance. Only actual supported `COMPLETE` advice
+can authorize the legacy positive completion flags. Negative workflow reports
+and unmet verification remain visible in full, summary, and capsule projections.
+
+When a fresh eligible non-null destination requires a change from the reported
+model, the manual adapter may add a separate `handoffRequest`, for example:
+
+```json
+{"status":"user_action_required","requestedModel":"gpt-6-astra","capsule":null,"persistedContextStatus":"unavailable","switched":false,"observedModel":null,"executionStatus":"not_attempted","availability":"unknown","quota":"unknown"}
+```
+
+This example requires explicit Astra eligibility; it is not the default policy.
+A stateful handoff supplies `modelHandoff` as its capsule. A matching reported
+model or a generic null-destination choice does not prepare a handoff. The adapter
+cannot switch models, control effort, establish trusted active-model identity,
+or observe provider availability, quota, or usage.
+
+Retry the identical semantic request with the same operation ID to read its
+historical receipt without a new write. Response-only `resultLevel`,
+`includeContext`, and legacy `hostCapabilities` may change on retry. Historical
+advice, policy provenance, handoff capsule, and identity retain their original
+meaning under changed operator policy; replay never prepares a fresh handoff.
+Replay with `includeContext:true` or `resultLevel:"capsule"` separately returns
+`currentDecisionCapsule`. It does not rewrite the receipt as current authorization.
+Revision/epoch conflicts return the current identity and full-context resync
+guidance; reassess before submitting a new operation.
+
+Turning the pilot off restores legacy routing and keeps saved projects, evidence,
+receipts, full/recovery reads, reference expansion, and adaptive compatibility
+tools reachable. No provider session or automatic host control is involved.
+
+For interruption, read recovery plus current full/reference context first.
+Recovery is selective; full state retains all original constraints, older
+counter-evidence, failures, registered unmet checks and epoch/revision. A new
+operationId must use the reconciled current expectedState; changing semantic
+input (including reported currentModel) is not an identical replay. Source-only
+evidence is not invalidated merely by a different reported model. Incomplete or
+stale references require resync, never guessed completion.
+
+All four efficiency policies permit useful MODERATE verification beyond their
+standard soft budget with a concrete inline `forge_plan.budgetOverride`, such as
+`{category:'unmet_success_criterion',justification:'The resumed source still lacks
+the mandatory dependency-contract regression result; verify it before satisfying
+the registered criterion.'}`. No extra governor call is needed. Plans/advice do
+not increment executed-cycle counters; retain usage-notice acknowledgements and
+honest cost labels. Internal `maximum` is not an API effort or host Ultra mode.
+
+See the [pilot operator guide](MODEL-ROUTING-PILOT.md) for the two independent
+opt-ins, manual resume and narrow-policy/off rollback without erasure. Both
+explicitly eligible models retain the full capability ceiling and all 19 tools.
+The [version-1 offline evaluation contract](MODEL-ROUTING-EVALUATION.md) defines
+the actual four-arm draft campaign, supplied-trace reporter and self-test commands.
+Empirical comparison is `not_run`, missing telemetry stays `null`, and protocol
+validation/synthetic results authorize no live campaign, spending or release.
+
 ## Usage impact
 
 `MINIMAL`, `LOW`, `MODERATE`, `HIGH`, and `VERY HIGH` are qualitative workflow labels. They are not exact token, compute, or price measurements.

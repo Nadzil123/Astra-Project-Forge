@@ -1,6 +1,6 @@
 # Astra Project Forge — Local Edition 2.6.2
 
-Astra Project Forge is a **local-first General Adaptive Agent Layer** for qualifying complex work in Codex. It does not turn Astra into AGI and it does not retrain model weights. It adds structured project state, goal management, uncertainty tracking, planning, evaluation, adaptation, transfer candidates, recovery context, and usage-aware routing around an eligible Astra model.
+Astra Project Forge is a **local-first General Adaptive Agent Layer** for qualifying complex work in Codex. It does not turn Astra into AGI and it does not retrain model weights. It adds structured project state, goal management, uncertainty tracking, planning, evaluation, adaptation, transfer candidates, recovery context, and usage-aware routing around an explicitly eligible model.
 
 ## Efficiency First
 
@@ -57,6 +57,24 @@ See [coordination and measured limits](docs/COORDINATION-v2.6.2.md),
 [the model-evaluation protocol (not run)](docs/EVALUATION-v2.6.2.md).
 The preceding v2.6.1 notes describe historical baselines. This package is v2.6.2.
 
+## Opt-In Model Routing Pilot
+
+The source pilot defaults to Sol eligibility (`gpt-6.1-sol`) and advice off.
+Dual eligibility and `ASTRA_FORGE_MODEL_ROUTING=advisory-v1` are two independent
+operator opt-ins. Advice preserves all 19 tools, full/recovery/reference reads,
+mandatory verification, usage notices and justified useful work beyond soft
+budgets. Either explicitly eligible model retains the full capability ceiling.
+
+The manual adapter can request a handoff, but cannot switch models or host effort
+and reports no observed switch. Missing usage/cost telemetry stays `null`.
+Empirical comparison is `not_run`; the four-arm campaign remains an unapproved
+draft, with separate live runtime/access/spending and release decisions.
+See the [operator pilot guide](docs/MODEL-ROUTING-PILOT.md) for negotiation,
+interruption/resume and rollback without state loss, and the
+[offline evaluation contract](docs/MODEL-ROUTING-EVALUATION.md) for synthetic
+self-tests and supplied-trace reporting. This is source integration, not a new
+release or installed-plugin update.
+
 ## Retained v2.6 capabilities
 
 - **Goal Graph** — goals, subgoals, dependencies, priorities, blockers, and evidence-backed verification.
@@ -97,7 +115,8 @@ No keyword or exact conversation starter is required. The **model gate** must be
 
 ## Model gate
 
-The default expected slug remains `gpt-6-astra`. Override it when your Codex environment reports a different eligible Astra slug:
+The default expected slug is `gpt-6.1-sol`, preserving the operator's upstream
+decision. Override it only when the operator chooses another exact eligible slug:
 
 ```bash
 export ASTRA_REQUIRED_MODEL="the-exact-slug-codex-reports"
@@ -105,13 +124,15 @@ export ASTRA_REQUIRED_MODEL="the-exact-slug-codex-reports"
 
 Forge never claims to switch models itself and never bypasses normal host/user permissions.
 
-You can explicitly allow more than one eligible Astra slug:
+An operator can explicitly allow both pilot models:
 
 ```bash
-export ASTRA_ALLOWED_MODELS="gpt-6-astra,gpt-6-astra-alt"
+export ASTRA_ALLOWED_MODELS="gpt-6.1-sol,gpt-6-astra"
 ```
 
 `ASTRA_REQUIRED_MODEL` remains the preferred/default slug shown when a switch is needed; `ASTRA_ALLOWED_MODELS` expands the accepted set.
+Enabling advice does not expand eligibility. Both eligible models retain all
+permitted capabilities; caller-reported model names cannot authorize access.
 
 ## v2.6 MCP facade
 
